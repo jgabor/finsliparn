@@ -6,6 +6,12 @@
   "module": "index.ts",
   "type": "module",
   "private": true,
+  "bin": {
+    "finsliparn": "src/mcp/server.ts"
+  },
+  "scripts": {
+    "mcp": "bun src/mcp/server.ts"
+  },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.24.3",
     "@types/node": "^24.10.1",

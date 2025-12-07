@@ -2,6 +2,8 @@
 
 This document outlines the development phases for Finsliparn, from the initial Proof of Concept (PoC) to the full Multi-Expert MVP.
 
+See [docs/spec-cc.md](docs/spec-cc.md) for detailed technical specifications.
+
 ---
 
 ## Phase 1: Foundation (Core Engine)
@@ -26,16 +28,16 @@ This document outlines the development phases for Finsliparn, from the initial P
 
 **Goal**: Expose the core engine via the Model Context Protocol (MCP).
 
-- [ ] **MCP Server Implementation**
-  - [ ] Setup `@modelcontextprotocol/sdk`
-- [ ] **Tool Implementation**
-  - [ ] `finslipa_start`: Initialize session & directive
-  - [ ] `finslipa_check`: Run tests, score result, update directive (The "Heartbeat")
-  - [ ] `finslipa_vote`: Select best iteration (Stub for Phase 1)
-  - [ ] `finslipa_merge`: Merge winning worktree to main
-  - [ ] `finslipa_status`: Read current state
-- [ ] **Response Formatting**
-  - [ ] Standardize `ToolResponse` with `nextSteps` guidance
+- [x] **MCP Server Implementation**
+  - [x] Setup `@modelcontextprotocol/sdk`
+- [x] **Tool Implementation**
+  - [x] `finslipa_start`: Initialize session & directive
+  - [x] `finslipa_check`: Run tests, score result, update directive (The "Heartbeat")
+  - [x] `finslipa_vote`: Select best iteration (Stub for Phase 1)
+  - [x] `finslipa_merge`: Merge winning worktree to main
+  - [x] `finslipa_status`: Read current state
+- [x] **Response Formatting**
+  - [x] Standardize `ToolResponse` with `nextSteps` guidance
 
 ## Phase 3: Claude Code Integration (v1.0.0)
 

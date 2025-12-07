@@ -201,3 +201,153 @@ export async function finslipaStatus(args: {
     };
   }
 }
+
+export async function finslipaVote(args: {
+  sessionId: string;
+  strategy?: "highest_score" | "minimal_diff" | "balanced";
+}): Promise<ToolResponse> {
+  const sessionManager = new SessionManager();
+  const strategy = args.strategy ?? "highest_score";
+
+  try {
+    const session = await sessionManager.loadSession(args.sessionId);
+    if (!session) {
+      return {
+        success: false,
+        message: `Session ${args.sessionId} not found`,
+        error: {
+          code: "SESSION_NOT_FOUND",
+          details: `No session with ID ${args.sessionId}`,
+        },
+      };
+    }
+
+    if (session.iterations.length === 0) {
+      return {
+        success: false,
+        message: "No iterations to vote on",
+        error: {
+          code: "NO_ITERATIONS",
+          details: "Run finslipa_check first to create iterations",
+        },
+      };
+    }
+
+    const completedIterations = session.iterations.filter(
+      (iteration) =>
+        iteration.status === "completed" && iteration.score !== undefined
+    );
+
+    if (completedIterations.length === 0) {
+      return {
+        success: false,
+        message: "No completed iterations with scores",
+        error: {
+          code: "NO_SCORED_ITERATIONS",
+          details: "All iterations must complete before voting",
+        },
+      };
+    }
+
+    const winner = completedIterations.reduce((best, current) =>
+      (current.score ?? 0) > (best.score ?? 0) ? current : best
+    );
+
+    await sessionManager.updateSessionStatus(args.sessionId, "evaluating");
+
+    return {
+      success: true,
+      message: `Selected iteration ${winner.iteration} with score ${winner.score}`,
+      data: {
+        selectedIteration: winner.iteration,
+        score: winner.score,
+        strategy,
+        totalIterations: completedIterations.length,
+      },
+      nextSteps: [`Call finslipa_merge to merge iteration ${winner.iteration}`],
+    };
+  } catch (error) {
+    return {
+      success: false,
+      message: `Failed to vote: ${error}`,
+      error: {
+        code: "VOTE_FAILED",
+        details: String(error),
+      },
+    };
+  }
+}
+
+export async function finslipaMerge(args: {
+  sessionId: string;
+  iterationNumber?: number;
+}): Promise<ToolResponse> {
+  const sessionManager = new SessionManager();
+
+  try {
+    const session = await sessionManager.loadSession(args.sessionId);
+    if (!session) {
+      return {
+        success: false,
+        message: `Session ${args.sessionId} not found`,
+        error: {
+          code: "SESSION_NOT_FOUND",
+          details: `No session with ID ${args.sessionId}`,
+        },
+      };
+    }
+
+    const targetIteration =
+      args.iterationNumber ??
+      session.selectedIteration ??
+      session.currentIteration;
+
+    const iteration = session.iterations.find(
+      (i) => i.iteration === targetIteration
+    );
+
+    if (!iteration) {
+      return {
+        success: false,
+        message: `Iteration ${targetIteration} not found`,
+        error: {
+          code: "ITERATION_NOT_FOUND",
+          details: `No iteration ${targetIteration} in session`,
+        },
+      };
+    }
+
+    if (iteration.score !== 100) {
+      return {
+        success: false,
+        message: `Cannot merge iteration with score ${iteration.score}. All tests must pass.`,
+        error: {
+          code: "TESTS_NOT_PASSING",
+          details: "Only iterations with 100% test pass rate can be merged",
+        },
+      };
+    }
+
+    await sessionManager.updateSessionStatus(args.sessionId, "completed");
+
+    return {
+      success: true,
+      message: `Session ${args.sessionId} completed successfully`,
+      data: {
+        sessionId: args.sessionId,
+        mergedIteration: targetIteration,
+        finalScore: iteration.score,
+      },
+      nextSteps: ["Refinement session complete. Changes are ready."],
+    };
+  } catch (error) {
+    return {
+      success: false,
+      message: `Failed to merge: ${error}`,
+      error: {
+        code: "MERGE_FAILED",
+        details: String(error),
+      },
+    };
+  }
+}
