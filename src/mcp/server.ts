@@ -34,6 +34,16 @@ server.setRequestHandler(ListToolsRequestSchema, () => ({
             type: "number",
             description: "Maximum refinement iterations (default: 5)",
           },
+          forceNew: {
+            type: "boolean",
+            description:
+              "Force creation of a new session even if an active session exists",
+          },
+          mergeThreshold: {
+            type: "number",
+            description:
+              "Minimum score (0-100) required to merge. If not provided, merge protection is disabled.",
+          },
         },
         required: ["taskDescription"],
       },
@@ -116,7 +126,12 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
   switch (name) {
     case "finslipa_start": {
       const result = await finslipaStart(
-        args as { taskDescription: string; maxIterations?: number }
+        args as {
+          taskDescription: string;
+          maxIterations?: number;
+          forceNew?: boolean;
+          mergeThreshold?: number;
+        }
       );
       return {
         content: [{ type: "text", text: JSON.stringify(result, null, 2) }],

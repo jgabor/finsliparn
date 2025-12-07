@@ -9,7 +9,16 @@ import type {
 } from "../types";
 
 const NOT_OK_PATTERN = /not ok \d+ - (.+)/;
-const SUMMARY_PATTERN = /(\d+) passed[,\s]+(\d+) failed/;
+const PASS_COUNT_PATTERN = /^\s*(\d+)\s+pass(?:ed)?(?:\s|$)/m;
+const FAIL_COUNT_PATTERN = /^\s*(\d+)\s+fail(?:ed)?(?:\s|$)/m;
+const DURATION_PATTERN = /Ran\s+\d+\s+tests?\s+.*?\[(\d+(?:\.\d+)?)\s*ms\]/;
+const PASS_MARKER_PATTERN = /^\s*ok\s+\d+/;
+const FAIL_MARKER_PATTERN = /^\s*not ok\s+\d+/;
+const CHECK_MARK_PATTERN = /[✗✕]\s*(.+)/;
+const STACK_TRACE_PATTERN = /at\s+.*?\s+\((.+):(\d+):\d+\)/;
+const FILE_LINE_PATTERN = /^\s+(.+):(\d+):\d+$/;
+const EXPECTED_PATTERN = /[Ee]xpected:\s*(.+)/;
+const ACTUAL_PATTERN = /[Rr]eceived:\s*(.+)/;
 
 export class BunTestRunner implements TestRunner {
   name = "bun";
@@ -55,51 +64,153 @@ export class BunTestRunner implements TestRunner {
     });
   }
 
-  parseOutput(stdout: string, _stderr: string): TestResults {
-    // Parse Bun test output
-    // Bun outputs TAP (Test Anything Protocol) format by default
-    const lines = stdout.split("\n");
+  private saveCurrentFailure(
+    currentFailure: TestFailure | null,
+    errorBuffer: string[],
+    failures: TestFailure[]
+  ): void {
+    if (currentFailure) {
+      currentFailure.message =
+        errorBuffer.join("\n").trim() || currentFailure.message;
+      failures.push(currentFailure);
+    }
+  }
+
+  private extractErrorDetails(line: string, failure: TestFailure): void {
+    const fileMatch =
+      line.match(STACK_TRACE_PATTERN) || line.match(FILE_LINE_PATTERN);
+    if (fileMatch && !failure.file) {
+      failure.file = fileMatch[1] ?? "";
+      failure.line = Number.parseInt(fileMatch[2] ?? "0", 10);
+    }
+
+    const expectedMatch = line.match(EXPECTED_PATTERN);
+    if (expectedMatch) {
+      failure.expected = expectedMatch[1]?.trim();
+    }
+
+    const actualMatch = line.match(ACTUAL_PATTERN);
+    if (actualMatch) {
+      failure.actual = actualMatch[1]?.trim();
+    }
+  }
+
+  private classifyLine(line: string): "pass" | "fail" | "other" {
+    if (
+      line.includes("✓") ||
+      line.includes("(pass)") ||
+      PASS_MARKER_PATTERN.test(line)
+    ) {
+      return "pass";
+    }
+    if (
+      line.includes("✗") ||
+      line.includes("(fail)") ||
+      FAIL_MARKER_PATTERN.test(line)
+    ) {
+      return "fail";
+    }
+    return "other";
+  }
+
+  private parseSummary(
+    combined: string,
+    lineByLineCount: { passed: number; failed: number }
+  ): {
+    passed: number;
+    failed: number;
+    duration: number;
+  } {
+    let passed = 0;
+    let failed = 0;
+
+    const passMatch = combined.match(PASS_COUNT_PATTERN);
+    const failMatch = combined.match(FAIL_COUNT_PATTERN);
+
+    if (passMatch?.[1] !== undefined) {
+      passed = Number.parseInt(passMatch[1], 10);
+    }
+    if (failMatch?.[1] !== undefined) {
+      failed = Number.parseInt(failMatch[1], 10);
+    }
+
+    if (
+      passed === 0 &&
+      failed === 0 &&
+      (lineByLineCount.passed > 0 || lineByLineCount.failed > 0)
+    ) {
+      passed = lineByLineCount.passed;
+      failed = lineByLineCount.failed;
+    }
+
+    let duration = 0;
+    const durationMatch = combined.match(DURATION_PATTERN);
+    if (durationMatch?.[1] !== undefined) {
+      duration = Number.parseFloat(durationMatch[1]);
+    }
+
+    return { passed, failed, duration };
+  }
+
+  private extractTestName(line: string): string {
+    const tapMatch = line.match(NOT_OK_PATTERN);
+    const checkMatch = line.match(CHECK_MARK_PATTERN);
+    return tapMatch?.[1] || checkMatch?.[1]?.trim() || line.trim();
+  }
+
+  parseOutput(stdout: string, stderr: string): TestResults {
+    // Parse Bun test output - combines stdout and stderr since Bun writes to both
+    const combined = `${stdout}\n${stderr}`;
+    const lines = combined.split("\n");
 
     let passed = 0;
     let failed = 0;
     const failures: TestFailure[] = [];
+    let currentFailure: TestFailure | null = null;
+    let errorBuffer: string[] = [];
 
     for (const line of lines) {
-      if (line.startsWith("ok ")) {
-        passed += 1;
-      } else if (line.startsWith("not ok ")) {
-        failed += 1;
-        // Extract test name from "not ok N - test name"
-        const match = line.match(NOT_OK_PATTERN);
-        const testName = match?.[1] || line;
+      const lineType = this.classifyLine(line);
 
-        failures.push({
-          name: testName,
+      if (lineType === "pass") {
+        this.saveCurrentFailure(currentFailure, errorBuffer, failures);
+        currentFailure = null;
+        errorBuffer = [];
+        passed += 1;
+        continue;
+      }
+
+      if (lineType === "fail") {
+        this.saveCurrentFailure(currentFailure, errorBuffer, failures);
+        failed += 1;
+        errorBuffer = [];
+        currentFailure = {
+          name: this.extractTestName(line),
           file: "",
           message: line,
-        });
+        };
+        continue;
+      }
+
+      if (currentFailure) {
+        this.extractErrorDetails(line, currentFailure);
+        if (line.trim()) {
+          errorBuffer.push(line);
+        }
       }
     }
 
-    // Look for summary line: "X passed, Y failed"
-    const summaryMatch = stdout.match(SUMMARY_PATTERN);
-    if (summaryMatch) {
-      const passedStr = summaryMatch[1];
-      const failedStr = summaryMatch[2];
-      if (passedStr !== undefined && failedStr !== undefined) {
-        passed = Number.parseInt(passedStr, 10);
-        failed = Number.parseInt(failedStr, 10);
-      }
-    }
+    // Don't forget the last failure
+    this.saveCurrentFailure(currentFailure, errorBuffer, failures);
 
-    const total = passed + failed;
+    const summary = this.parseSummary(combined, { passed, failed });
 
     return {
       framework: "bun",
-      passed,
-      failed,
-      total,
-      duration: 0,
+      passed: summary.passed,
+      failed: summary.failed,
+      total: summary.passed + summary.failed,
+      duration: summary.duration,
       failures,
     };
   }

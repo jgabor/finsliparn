@@ -14,6 +14,7 @@ export type RefinementSession = {
   currentIteration: number;
   iterations: IterationResult[];
   selectedIteration?: number; // Winner (after voting)
+  mergeThreshold?: number; // Score threshold for merge (undefined = disabled)
 };
 
 export type SessionStatus =
@@ -28,6 +29,7 @@ export type SessionConfig = {
   maxIterations: number; // Default: 5
   timeout: number; // Default: 300000 (5 min)
   parallelExperts: boolean; // Default: false (PoC)
+  mergeThreshold?: number; // Score threshold for merge (0-100, null/undefined = disabled)
 };
 
 // Iteration Results
@@ -81,6 +83,28 @@ export type DiffAnalysis = {
   complexityScore: number; // Heuristic for risk
 };
 
+// Quality Analysis Types
+export type QualityAnalysis = {
+  signals: QualitySignal[];
+  score: number; // 0-100, higher is better
+};
+
+export type QualitySignal = {
+  type:
+    | "large_function"
+    | "deep_nesting"
+    | "long_line"
+    | "console_log"
+    | "todo_comment"
+    | "any_type"
+    | "magic_number";
+  severity: "error" | "warning" | "info";
+  message: string;
+  file: string;
+  line?: number;
+  suggestion: string;
+};
+
 // Scoring Types
 export type ScoreWeights = {
   testPass: number; // Weight for passing tests
@@ -94,6 +118,8 @@ export type DirectiveContext = {
   nextActions: string[];
   constraints?: string;
   history?: IterationSummary[];
+  specHints?: string[]; // Paths to spec/reference files for context
+  qualityAnalysis?: QualityAnalysis; // Code quality signals and suggestions
 };
 
 export type IterationSummary = {

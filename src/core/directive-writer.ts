@@ -1,4 +1,4 @@
-import { mkdir, writeFile } from "node:fs/promises";
+import { mkdir } from "node:fs/promises";
 import { join } from "node:path";
 import type { DirectiveContext } from "../types";
 import { FeedbackGenerator } from "./feedback-generator";
@@ -17,7 +17,7 @@ export class DirectiveWriter {
     const directivePath = join(this.finsliparnDir, "directive.md");
 
     await mkdir(this.finsliparnDir, { recursive: true });
-    await writeFile(directivePath, directive, "utf-8");
+    await Bun.write(directivePath, directive);
   }
 
   private async buildDirective(context: DirectiveContext): Promise<string> {
@@ -37,6 +37,16 @@ export class DirectiveWriter {
 
     // Task description
     content += `## Task\n\n${session.taskDescription}\n\n`;
+
+    // Spec hints (if any)
+    if (context.specHints && context.specHints.length > 0) {
+      content += "## Reference Documentation\n\n";
+      content += "Review these files for requirements and specifications:\n\n";
+      for (const specPath of context.specHints) {
+        content += `- \`${specPath}\`\n`;
+      }
+      content += "\n";
+    }
 
     // Latest feedback
     const feedback = await this.feedbackGenerator.generate(context);

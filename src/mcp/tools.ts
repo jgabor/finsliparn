@@ -1,22 +1,139 @@
-// Finsliparn Tool Handlers
-// MCP Server integration will follow in Phase 2
-// These handlers are exported for use by MCP clients
-
+import { readdirSync } from "node:fs";
+import { join } from "node:path";
+import { DiffAnalyzer } from "../core/diff-analyzer";
 import { DirectiveWriter } from "../core/directive-writer";
+import { QualityAnalyzer } from "../core/quality-analyzer";
+import { ScoringEngine } from "../core/scoring-engine";
 import { SessionManager } from "../core/session-manager";
 import { detectTestRunner } from "../core/test-runner";
-import type { ToolResponse } from "../types";
+import type {
+  DiffAnalysis,
+  IterationSummary,
+  QualityAnalysis,
+  TestResults,
+  ToolResponse,
+} from "../types";
+
+const SPEC_FILENAMES = [
+  "spec",
+  "roadmap",
+  "architecture",
+  "design",
+  "specification",
+];
+const SPEC_DIRECTORIES = [".", "docs"];
+
+function buildNextActions(
+  testResults: TestResults,
+  diffAnalysis: DiffAnalysis,
+  remainingIterations: number
+): string[] {
+  const hasActualTests = testResults.total > 0;
+  const allPassing = hasActualTests && testResults.failed === 0;
+
+  if (!hasActualTests) {
+    return [
+      "No tests detected - ensure tests exist and run correctly",
+      "Call finslipa_check again after adding tests",
+    ];
+  }
+  if (allPassing) {
+    return [
+      "All tests passing!",
+      `Complexity: ${diffAnalysis.complexity}`,
+      "Review the diff for quality improvements, then call finslipa_merge to complete",
+    ];
+  }
+  return [
+    `${testResults.failed} test(s) failing`,
+    "Fix the failing tests and call finslipa_check again",
+    `${remainingIterations} iteration(s) remaining`,
+  ];
+}
+
+function buildNextSteps(testResults: TestResults): string[] {
+  const hasActualTests = testResults.total > 0;
+  const allPassing = hasActualTests && testResults.failed === 0;
+
+  if (!hasActualTests) {
+    return ["No tests detected - add tests and run finslipa_check again"];
+  }
+  if (allPassing) {
+    return ["All tests passing! Call finslipa_merge to complete"];
+  }
+  return ["Fix failing tests and run finslipa_check again"];
+}
+
+function isSpecFile(filename: string): boolean {
+  const lower = filename.toLowerCase();
+  if (!lower.endsWith(".md")) {
+    return false;
+  }
+  const baseName = lower.slice(0, -3);
+  return SPEC_FILENAMES.some(
+    (spec) => baseName === spec || baseName.startsWith(`${spec}-`)
+  );
+}
+
+function detectSpecFiles(cwd: string = process.cwd()): string[] {
+  const found: string[] = [];
+
+  for (const dir of SPEC_DIRECTORIES) {
+    try {
+      const dirPath = dir === "." ? cwd : join(cwd, dir);
+      const files = readdirSync(dirPath).filter(isSpecFile);
+
+      for (const file of files) {
+        found.push(dir === "." ? file : `${dir}/${file}`);
+      }
+    } catch {
+      // Directory doesn't exist
+    }
+  }
+
+  return found;
+}
 
 export async function finslipaStart(args: {
   taskDescription: string;
   maxIterations?: number;
+  forceNew?: boolean;
+  mergeThreshold?: number; // Score threshold for merge (undefined = no protection)
 }): Promise<ToolResponse> {
   const sessionManager = new SessionManager();
 
   try {
+    // Check for existing active session unless forceNew is set
+    if (!args.forceNew) {
+      const activeSession = await sessionManager.getActiveSession();
+      if (activeSession) {
+        return {
+          success: true,
+          message: `Found active session: ${activeSession.id}`,
+          data: {
+            sessionId: activeSession.id,
+            taskDescription: activeSession.taskDescription,
+            currentIteration: activeSession.currentIteration,
+            maxIterations: activeSession.maxIterations,
+            status: activeSession.status,
+          },
+          nextSteps: [
+            `Active session found for: "${activeSession.taskDescription}"`,
+            `Current progress: iteration ${activeSession.currentIteration}/${activeSession.maxIterations}`,
+            "To resume this session, call finslipa_check with the sessionId above",
+            "To start a fresh session instead, call finslipa_start with forceNew: true",
+          ],
+        };
+      }
+    }
+
     const session = await sessionManager.createSession(args.taskDescription, {
       maxIterations: args.maxIterations || 5,
+      mergeThreshold: args.mergeThreshold,
     });
+
+    // Detect spec files for context
+    const specHints = detectSpecFiles();
 
     // Initialize directive
     const directiveWriter = new DirectiveWriter();
@@ -32,6 +149,7 @@ export async function finslipaStart(args: {
         `Implement the task: ${args.taskDescription}`,
         "Then call finslipa_check to validate with tests",
       ],
+      specHints: specHints.length > 0 ? specHints : undefined,
     });
 
     return {
@@ -58,6 +176,7 @@ export async function finslipaStart(args: {
   }
 }
 
+// biome-ignore lint/complexity/noExcessiveCognitiveComplexity: Full iteration workflow with test running, analysis, and directive updates
 export async function finslipaCheck(args: {
   sessionId: string;
 }): Promise<ToolResponse> {
@@ -76,6 +195,19 @@ export async function finslipaCheck(args: {
       };
     }
 
+    // Safety check: prevent infinite loops
+    if (session.currentIteration >= session.maxIterations) {
+      await sessionManager.updateSessionStatus(args.sessionId, "failed");
+      return {
+        success: false,
+        message: `Max iterations (${session.maxIterations}) reached`,
+        error: {
+          code: "MAX_ITERATIONS_REACHED",
+          details: `Session has reached the maximum of ${session.maxIterations} iterations. Consider starting a new session or increasing maxIterations.`,
+        },
+      };
+    }
+
     // Update status to iterating
     await sessionManager.updateSessionStatus(args.sessionId, "iterating");
 
@@ -87,11 +219,26 @@ export async function finslipaCheck(args: {
         cwd: process.cwd(),
       });
 
-      // Calculate score
-      const score =
-        testResults.total > 0
-          ? Math.round((testResults.passed / testResults.total) * 100)
-          : 0;
+      // Analyze diff for complexity scoring
+      const diffAnalyzer = new DiffAnalyzer();
+      const diffAnalysis = await diffAnalyzer.analyze(process.cwd());
+
+      // Analyze code quality when tests pass
+      let qualityAnalysis: QualityAnalysis | undefined;
+      if (testResults.failed === 0 && testResults.total > 0) {
+        const rawDiff = await diffAnalyzer.getRawDiff(process.cwd());
+        if (rawDiff) {
+          const qualityAnalyzer = new QualityAnalyzer();
+          qualityAnalysis = qualityAnalyzer.analyze(rawDiff);
+        }
+      }
+
+      // Calculate score using ScoringEngine with diff analysis
+      const scoringEngine = new ScoringEngine();
+      const scoreResult = scoringEngine.calculateScore(
+        testResults,
+        diffAnalysis
+      );
 
       // Create iteration result
       const iteration = session.currentIteration + 1;
@@ -100,28 +247,49 @@ export async function finslipaCheck(args: {
         status: "completed",
         timestamp: new Date(),
         testResults,
-        score,
+        score: scoreResult.score,
+        diff: diffAnalysis,
       });
 
-      // Update directive with feedback
+      // Transition to completed if all tests pass
+      const allTestsPassing = testResults.failed === 0 && testResults.total > 0;
+      if (allTestsPassing) {
+        await sessionManager.updateSessionStatus(args.sessionId, "completed");
+      }
+
+      // Update directive with feedback - reload session to get updated status
       const directiveWriter = new DirectiveWriter();
+      const updatedSession = await sessionManager.loadSession(args.sessionId);
       const latestIteration = await sessionManager.getLatestIteration(
         args.sessionId
       );
 
-      if (latestIteration) {
-        const nextActions =
-          testResults.failed === 0
-            ? ["All tests passing! Session complete."]
-            : [
-                `${testResults.failed} test(s) failing`,
-                "Fix the failing tests and call finslipa_check again",
-              ];
+      if (latestIteration && updatedSession) {
+        // Build history from previous iterations using UPDATED session to prevent repeating mistakes
+        const history: IterationSummary[] = updatedSession.iterations
+          .filter((iter) => iter.testResults && iter.score !== undefined)
+          .map((iter) => ({
+            iteration: iter.iteration,
+            score: iter.score ?? 0,
+            summary: iter.testResults
+              ? `${iter.testResults.passed}/${iter.testResults.total} tests passing`
+              : "No test results",
+          }));
+        const remainingIterations = updatedSession.maxIterations - iteration;
+        const nextActions = buildNextActions(
+          testResults,
+          diffAnalysis,
+          remainingIterations
+        );
+        const specHints = detectSpecFiles();
 
         await directiveWriter.write({
-          session,
+          session: updatedSession,
           latestIteration,
           nextActions,
+          history: history.length > 0 ? history : undefined,
+          specHints: specHints.length > 0 ? specHints : undefined,
+          qualityAnalysis,
         });
       }
 
@@ -132,12 +300,11 @@ export async function finslipaCheck(args: {
           passed: testResults.passed,
           failed: testResults.failed,
           total: testResults.total,
-          score,
+          score: scoreResult.score,
+          complexity: diffAnalysis.complexity,
+          remainingIterations: session.maxIterations - iteration,
         },
-        nextSteps:
-          testResults.failed === 0
-            ? ["All tests passing! Refinement complete."]
-            : ["Fix failing tests and run finslipa_check again"],
+        nextSteps: buildNextSteps(testResults),
       };
     } catch {
       return {
@@ -317,13 +484,15 @@ export async function finslipaMerge(args: {
       };
     }
 
-    if (iteration.score !== 100) {
+    // Check merge threshold if configured (undefined means disabled)
+    const threshold = session.mergeThreshold;
+    if (threshold !== undefined && (iteration.score ?? 0) < threshold) {
       return {
         success: false,
-        message: `Cannot merge iteration with score ${iteration.score}. All tests must pass.`,
+        message: `Cannot merge iteration with score ${iteration.score}. Minimum required: ${threshold}%.`,
         error: {
-          code: "TESTS_NOT_PASSING",
-          details: "Only iterations with 100% test pass rate can be merged",
+          code: "SCORE_BELOW_THRESHOLD",
+          details: `Score ${iteration.score}% is below the merge threshold of ${threshold}%`,
         },
       };
     }

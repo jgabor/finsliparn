@@ -6,9 +6,10 @@
 
 declare const Bun: {
   stdin: { text(): Promise<string> };
+  file(path: string): { text(): Promise<string> };
 };
 
-import { readdir, readFile } from "node:fs/promises";
+import { readdir } from "node:fs/promises";
 import { join } from "node:path";
 
 type HookInput = {
@@ -46,7 +47,7 @@ async function findActiveSession(
     for (const entry of entries) {
       const statePath = join(sessionsDir, entry, "state.json");
       try {
-        const content = await readFile(statePath, "utf-8");
+        const content = await Bun.file(statePath).text();
         const session = JSON.parse(content);
         if (
           session.status === "iterating" ||

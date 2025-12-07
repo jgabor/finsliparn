@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { mkdir, readdir } from "node:fs/promises";
 import { join } from "node:path";
 import type {
   IterationResult,
@@ -38,6 +38,7 @@ export class SessionManager {
       maxIterations: finalConfig.maxIterations,
       currentIteration: 0,
       iterations: [],
+      mergeThreshold: finalConfig.mergeThreshold,
     };
 
     await this.persistSession(session);
@@ -47,7 +48,7 @@ export class SessionManager {
   async loadSession(sessionId: string): Promise<RefinementSession | null> {
     try {
       const statePath = this.getSessionStatePath(sessionId);
-      const content = await readFile(statePath, "utf-8");
+      const content = await Bun.file(statePath).text();
       const data = JSON.parse(content);
       // Convert date strings back to Date objects
       return {
@@ -69,7 +70,7 @@ export class SessionManager {
     await mkdir(dir, { recursive: true });
 
     const statePath = this.getSessionStatePath(session.id);
-    await writeFile(statePath, JSON.stringify(session, null, 2));
+    await Bun.write(statePath, JSON.stringify(session, null, 2));
   }
 
   async updateSessionStatus(
@@ -103,7 +104,7 @@ export class SessionManager {
     const iterDir = join(this.getSessionDir(sessionId), "iterations");
     await mkdir(iterDir, { recursive: true });
     const iterPath = join(iterDir, `${iteration.iteration}.json`);
-    await writeFile(iterPath, JSON.stringify(iteration, null, 2));
+    await Bun.write(iterPath, JSON.stringify(iteration, null, 2));
 
     await this.persistSession(session);
   }
@@ -115,6 +116,21 @@ export class SessionManager {
     }
     const iter = session.iterations.at(-1);
     return iter ?? null;
+  }
+
+  async getActiveSession(): Promise<RefinementSession | null> {
+    try {
+      const sessionIds = await readdir(this.sessionsDir);
+      for (const sessionId of sessionIds) {
+        const session = await this.loadSession(sessionId);
+        if (session && ["initializing", "iterating"].includes(session.status)) {
+          return session;
+        }
+      }
+    } catch {
+      // Sessions directory doesn't exist yet
+    }
+    return null;
   }
 
   private getSessionDir(sessionId: string): string {

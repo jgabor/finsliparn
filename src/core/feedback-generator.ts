@@ -1,8 +1,19 @@
-import type { DirectiveContext, IterationSummary, TestResults } from "../types";
+import type {
+  DirectiveContext,
+  IterationSummary,
+  QualityAnalysis,
+  TestResults,
+} from "../types";
 
 export class FeedbackGenerator {
   generate(context: DirectiveContext): Promise<string> {
-    const { latestIteration, nextActions, constraints, history } = context;
+    const {
+      latestIteration,
+      nextActions,
+      constraints,
+      history,
+      qualityAnalysis,
+    } = context;
 
     let feedback = `# Iteration ${latestIteration.iteration} Feedback\n\n`;
 
@@ -14,6 +25,11 @@ export class FeedbackGenerator {
     // Test results section
     if (latestIteration.testResults) {
       feedback += this.generateTestResultsSection(latestIteration.testResults);
+    }
+
+    // Quality analysis section (only when tests pass)
+    if (qualityAnalysis && latestIteration.testResults?.failed === 0) {
+      feedback += this.generateQualitySection(qualityAnalysis);
     }
 
     // History section
@@ -76,6 +92,46 @@ export class FeedbackGenerator {
       section += `**Iteration ${item.iteration}** (Score: ${item.score}%)\n`;
       section += `${item.summary}\n\n`;
     }
+    return section;
+  }
+
+  private generateQualitySection(analysis: QualityAnalysis): string {
+    let section = "## Code Quality Analysis\n\n";
+    section += `**Quality Score**: ${analysis.score}/100\n\n`;
+
+    if (analysis.signals.length === 0) {
+      section += "No quality issues detected. Great work!\n\n";
+      return section;
+    }
+
+    const errors = analysis.signals.filter((s) => s.severity === "error");
+    const warnings = analysis.signals.filter((s) => s.severity === "warning");
+    const info = analysis.signals.filter((s) => s.severity === "info");
+
+    if (errors.length > 0) {
+      section += "### Errors\n\n";
+      for (const signal of errors) {
+        section += `- **${signal.file}**: ${signal.message}\n`;
+        section += `  - ${signal.suggestion}\n\n`;
+      }
+    }
+
+    if (warnings.length > 0) {
+      section += "### Warnings\n\n";
+      for (const signal of warnings) {
+        section += `- **${signal.file}**: ${signal.message}\n`;
+        section += `  - ${signal.suggestion}\n\n`;
+      }
+    }
+
+    if (info.length > 0) {
+      section += "### Suggestions\n\n";
+      for (const signal of info) {
+        section += `- **${signal.file}**: ${signal.message}\n`;
+        section += `  - ${signal.suggestion}\n\n`;
+      }
+    }
+
     return section;
   }
 }

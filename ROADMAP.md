@@ -55,17 +55,40 @@ See [docs/spec-cc.md](docs/spec-cc.md) for detailed technical specifications.
 
 **Goal**: Make the feedback loop smarter and safer.
 
-- [ ] **Scoring Engine**
-  - [ ] Calculate pass rate %
-  - [ ] Implement `DiffAnalyzer` to detect complexity spikes
-- [ ] **Feedback Templates**
-  - [ ] "Failing Tests" section with specific error messages
-  - [ ] "History" section to prevent repeating mistakes
-- [ ] **Safety Checks**
-  - [ ] Prevent infinite loops (max iterations)
-  - [ ] Prevent destructive merges
+- [x] **Scoring Engine**
+  - [x] Calculate pass rate %
+  - [x] Implement `DiffAnalyzer` to detect complexity spikes
+- [x] **Feedback Templates**
+  - [x] "Failing Tests" section with specific error messages
+  - [x] "History" section to prevent repeating mistakes
+- [x] **Safety Checks**
+  - [x] Prevent infinite loops (max iterations)
+  - [x] Prevent destructive merges
 
-## Phase 5: Copilot CLI Support (v2.0.0)
+## Phase 5: Robustness & Quality Feedback
+
+**Goal**: Make the refinement loop robust and provide quality feedback even when tests pass (Poetiq-inspired).
+
+- [x] **Test Parser Fixes**
+  - [x] Fix SUMMARY_PATTERN regex to handle Bun's output format
+  - [x] Add fallback parsing when summary regex fails
+  - [x] Parse test duration from output
+- [x] **Session State Fixes**
+  - [x] Fix stale session passed to DirectiveWriter
+  - [x] Fix premature completion when total=0
+- [x] **Quality Analyzer**
+  - [x] Analyze diff for code quality signals
+  - [x] Generate actionable suggestions when tests pass
+  - [x] Track large functions, review hotspots, code smells
+- [x] **DiffAnalyzer Resilience**
+  - [x] Handle git diff failures gracefully
+  - [x] Try alternative strategies (staged, working directory)
+- [x] **Enhanced Directive Format**
+  - [x] Include diff summary in feedback
+  - [x] Add quality signals section
+  - [x] Show iteration comparison
+
+## Phase 6: Copilot CLI Support (v2.0.0)
 
 **Goal**: Enable the same workflow for GitHub Copilot CLI users.
 
@@ -76,7 +99,7 @@ See [docs/spec-cc.md](docs/spec-cc.md) for detailed technical specifications.
   - [ ] Ensure `finslipa_check` is idempotent (safe for both Hook and Agent usage)
   - [ ] Verify `directive.md` provides sufficient context for a "blind" agent
 
-## Phase 6: Advanced Features (MVP)
+## Future: Advanced Features (MVP)
 
 **Goal**: Move from "Single Expert" to "Parallel Exploration".
 

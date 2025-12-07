@@ -2,8 +2,10 @@ import { describe, expect, test } from "bun:test";
 import { mkdir } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import type { IterationResult, TestResults } from "../types";
+import type { DiffAnalysis, IterationResult, TestResults } from "../types";
+import { DiffAnalyzer } from "./diff-analyzer";
 import { FeedbackGenerator } from "./feedback-generator";
+import { ScoringEngine } from "./scoring-engine";
 import { SessionManager } from "./session-manager";
 import { BunTestRunner } from "./test-runner";
 
@@ -129,5 +131,157 @@ describe("FeedbackGenerator", () => {
     expect(feedback).toContain("Iteration 1 Feedback");
     expect(feedback).toContain("66%");
     expect(feedback).toContain("test that fails");
+  });
+});
+
+describe("ScoringEngine", () => {
+  test("should calculate pass rate for all passing tests", () => {
+    const engine = new ScoringEngine();
+    const testResults: TestResults = {
+      framework: "bun",
+      passed: 10,
+      failed: 0,
+      total: 10,
+      duration: 100,
+      failures: [],
+    };
+
+    const passRate = engine.calculatePassRate(testResults);
+    expect(passRate).toBe(100);
+  });
+
+  test("should calculate pass rate for mixed results", () => {
+    const engine = new ScoringEngine();
+    const testResults: TestResults = {
+      framework: "bun",
+      passed: 7,
+      failed: 3,
+      total: 10,
+      duration: 100,
+      failures: [],
+    };
+
+    const passRate = engine.calculatePassRate(testResults);
+    expect(passRate).toBe(70);
+  });
+
+  test("should return 0 pass rate for no tests", () => {
+    const engine = new ScoringEngine();
+    const testResults: TestResults = {
+      framework: "bun",
+      passed: 0,
+      failed: 0,
+      total: 0,
+      duration: 0,
+      failures: [],
+    };
+
+    const passRate = engine.calculatePassRate(testResults);
+    expect(passRate).toBe(0);
+  });
+
+  test("should calculate score without diff analysis", () => {
+    const engine = new ScoringEngine();
+    const testResults: TestResults = {
+      framework: "bun",
+      passed: 8,
+      failed: 2,
+      total: 10,
+      duration: 100,
+      failures: [],
+    };
+
+    const result = engine.calculateScore(testResults);
+    expect(result.score).toBe(80);
+    expect(result.passRate).toBe(80);
+    expect(result.breakdown.testPassScore).toBe(80);
+    expect(result.breakdown.complexityPenalty).toBe(0);
+  });
+
+  test("should apply complexity penalty from diff analysis", () => {
+    const engine = new ScoringEngine();
+    const testResults: TestResults = {
+      framework: "bun",
+      passed: 10,
+      failed: 0,
+      total: 10,
+      duration: 100,
+      failures: [],
+    };
+    const diffAnalysis: DiffAnalysis = {
+      filesChanged: ["file1.ts", "file2.ts"],
+      insertions: 100,
+      deletions: 50,
+      complexity: "high",
+      complexityScore: 50,
+    };
+
+    const result = engine.calculateScore(testResults, diffAnalysis);
+    expect(result.score).toBe(95);
+    expect(result.breakdown.complexityPenalty).toBe(5);
+  });
+
+  test("should use getScore helper method", () => {
+    const engine = new ScoringEngine();
+    const testResults: TestResults = {
+      framework: "bun",
+      passed: 5,
+      failed: 5,
+      total: 10,
+      duration: 100,
+      failures: [],
+    };
+
+    const score = engine.getScore(testResults);
+    expect(score).toBe(50);
+  });
+
+  test("should respect custom weights", () => {
+    const engine = new ScoringEngine({ complexityPenalty: 0.5 });
+    const testResults: TestResults = {
+      framework: "bun",
+      passed: 10,
+      failed: 0,
+      total: 10,
+      duration: 100,
+      failures: [],
+    };
+    const diffAnalysis: DiffAnalysis = {
+      filesChanged: ["file1.ts"],
+      insertions: 50,
+      deletions: 10,
+      complexity: "medium",
+      complexityScore: 20,
+    };
+
+    const result = engine.calculateScore(testResults, diffAnalysis);
+    expect(result.score).toBe(90);
+    expect(result.breakdown.complexityPenalty).toBe(10);
+  });
+});
+
+describe("DiffAnalyzer", () => {
+  test("should analyze git diff in current directory", async () => {
+    const analyzer = new DiffAnalyzer();
+    const result = await analyzer.analyze(process.cwd());
+
+    expect(result).toHaveProperty("filesChanged");
+    expect(result).toHaveProperty("insertions");
+    expect(result).toHaveProperty("deletions");
+    expect(result).toHaveProperty("complexity");
+    expect(result).toHaveProperty("complexityScore");
+    expect(Array.isArray(result.filesChanged)).toBe(true);
+    expect(typeof result.insertions).toBe("number");
+    expect(typeof result.deletions).toBe("number");
+    expect(["low", "medium", "high"]).toContain(result.complexity);
+  });
+
+  test("should return empty analysis for non-git directory", async () => {
+    const analyzer = new DiffAnalyzer();
+    const result = await analyzer.analyze("/tmp");
+
+    expect(result.filesChanged).toEqual([]);
+    expect(result.insertions).toBe(0);
+    expect(result.deletions).toBe(0);
   });
 });
