@@ -1,6 +1,6 @@
 # Finsliparn
 
-> **Swedish**: *the honer* — from *finslipa*, meaning "to hone", "to fine-tune" or "to put the finishing touches on."
+> **Swedish**: _the honer_ — from _finslipa_, meaning "to hone", "to fine-tune" or "to put the finishing touches on."
 
 **Finsliparn** is a Bun-native **MCP Server** and **Claude Code Plugin** that transforms single-attempt coding into a multi-attempt, test-validated refinement loop. It adapts the philosophy of [Poetiq's ARC-AGI solver](https://poetiq.ai/posts/arcagi_verified/) to general software development.
 
@@ -8,7 +8,7 @@
 
 ## 🎯 Core Value Proposition
 
-LLMs often generate code that *looks* correct but fails in edge cases. Finsliparn solves this by enforcing a **Refinement Loop**:
+LLMs often generate code that _looks_ correct but fails in edge cases. Finsliparn solves this by enforcing a **Refinement Loop**:
 
 1. **Iterate**: The LLM implements a solution.
 2. **Validate**: Finsliparn runs your actual test suite (not just a syntax check).
@@ -53,7 +53,7 @@ graph LR
 
 ### Prerequisites
 
-- [Bun](https://bun.sh) v1.1+
+- [Bun](https://bun.sh) v1.3+
 - Git
 
 ### Installation (Development)

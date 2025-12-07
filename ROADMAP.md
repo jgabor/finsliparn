@@ -8,9 +8,10 @@ This document outlines the development phases for Finsliparn, from the initial P
 
 **Goal**: Establish the core logic that powers the refinement loop, independent of any specific LLM platform.
 
-- [ ] **Project Setup**
-  - [ ] Initialize Bun project with TypeScript
-  - [ ] Configure linting and testing (Bun Test)
+- [x] **Project Setup**
+  - [x] Initialize Bun project with TypeScript
+  - [x] Configure linting (biome/ultracite)
+  - [ ] Configure testing (Bun Test)
 - [ ] **Session Management**
   - [ ] `SessionManager`: Create, load, and persist session state (`state.json`)
   - [ ] `WorktreeManager`: Create and manage isolated git worktrees

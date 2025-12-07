@@ -1,0 +1,16 @@
+pre-commit:
+  jobs:
+    - run: bun x ultracite fix
+      stage_fixed: true
+      glob:
+        - "*.js"
+        - "*.jsx"
+        - "*.ts"
+        - "*.tsx"
+        - "*.json"
+        - "*.jsonc"
+        - "*.css"
+    - run: bun x markdownlint --fix --disable MD013 MD029 MD033 MD036 MD040 --
+      stage_fixed: true
+      glob:
+        - "*.md"
