@@ -11,16 +11,16 @@ This document outlines the development phases for Finsliparn, from the initial P
 - [x] **Project Setup**
   - [x] Initialize Bun project with TypeScript
   - [x] Configure linting (biome/ultracite)
-  - [ ] Configure testing (Bun Test)
-- [ ] **Session Management**
-  - [ ] `SessionManager`: Create, load, and persist session state (`state.json`)
-  - [ ] `WorktreeManager`: Create and manage isolated git worktrees
-- [ ] **The Control Plane**
-  - [ ] `DirectiveWriter`: Generate the `directive.md` file (the "brain" of the operation)
-  - [ ] `FeedbackGenerator`: Transform raw test results into actionable markdown
-- [ ] **Test Runner Abstraction**
-  - [ ] Implement `BunTestRunner` (v1 priority)
-  - [ ] Define interface for future runners (Vitest, Jest)
+  - [x] Configure testing (Bun Test)
+- [x] **Session Management**
+  - [x] `SessionManager`: Create, load, and persist session state (`state.json`)
+  - [x] `WorktreeManager`: Create and manage isolated git worktrees
+- [x] **The Control Plane**
+  - [x] `DirectiveWriter`: Generate the `directive.md` file (the "brain" of the operation)
+  - [x] `FeedbackGenerator`: Transform raw test results into actionable markdown
+- [x] **Test Runner Abstraction**
+  - [x] Implement `BunTestRunner` (v1 priority)
+  - [x] Define interface for future runners (Vitest, Jest)
 
 ## Phase 2: The MCP Server (API Layer)
 
