@@ -1,0 +1,11 @@
+{
+  "name": "finsliparn",
+  "version": "1.0.0",
+  "description": "Iterative refinement and test-driven validation for coding tasks",
+  "author": {
+    "name": "Jonathan Gabor"
+  },
+  "keywords": ["refinement", "testing", "iterative", "validation"],
+  "mcpServers": "./.mcp.json",
+  "hooks": "./hooks/hooks.json"
+}

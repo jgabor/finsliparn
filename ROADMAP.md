@@ -43,13 +43,13 @@ See [docs/spec-cc.md](docs/spec-cc.md) for detailed technical specifications.
 
 **Goal**: A seamless "zero-friction" experience for Claude Code users.
 
-- [ ] **Plugin Manifest**
-  - [ ] Define `manifest.json` with commands and hooks
-- [ ] **Command Handlers**
-  - [ ] `/finslipa`: Interactive session starter
-  - [ ] `/finslipa:status`: Quick status check
-- [ ] **Hooks**
-  - [ ] `PostToolUse`: The "Magic" trigger. Detects edits, runs `finslipa_check` automatically, and injects feedback.
+- [x] **Plugin Manifest**
+  - [x] Define `plugin.json` with commands and hooks
+- [x] **Command Handlers**
+  - [x] `/finslipa`: Interactive session starter
+  - [x] `/finslipa:status`: Quick status check
+- [x] **Hooks**
+  - [x] `PostToolUse`: The "Magic" trigger. Detects edits and injects feedback with session context.
 
 ## Phase 4: Intelligence & Scoring
 
