@@ -1,12 +1,12 @@
-output:
-  [
+output: [
+    # "meta",
     "summary",
-    "success",
+    # "success",
     "failure",
-    "execution",
-    "execution_out",
-    "execution_info",
-    "skips",
+    # "execution",
+    # "execution_out",
+    # "execution_info",
+    # "skips",
   ]
 
 post-checkout:
@@ -34,8 +34,8 @@ pre-push:
   parallel: true
   commands:
     check:
-      run: "bunx ultracite check"
+      run: bunx ultracite check
     typecheck:
-      run: "bunx tsc --noEmit"
+      run: bunx tsc --noEmit
     test:
-      run: "bun test"
+      run: bun test

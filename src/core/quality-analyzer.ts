@@ -1,4 +1,5 @@
 import type { QualityAnalysis, QualitySignal } from "../types";
+import { IGNORED_FILE_PATTERNS } from "./diff-analyzer.js";
 
 const DIFF_FILE_PATTERN = /b\/(.+)$/;
 const FUNCTION_PATTERN = /^\s*\w+\s*\(.*\)\s*{/;
@@ -12,12 +13,18 @@ export class QualityAnalyzer {
   private readonly LONG_LINE_THRESHOLD = 120;
   private readonly NESTED_DEPTH_THRESHOLD = 4;
 
+  private shouldIgnoreFile(file: string): boolean {
+    const basename = file.split("/").pop() ?? file;
+    return IGNORED_FILE_PATTERNS.some((pattern) => pattern.test(basename));
+  }
+
   // biome-ignore lint/complexity/noExcessiveCognitiveComplexity: Line-by-line diff analysis requires sequential checks
   analyze(diff: string): QualityAnalysis {
     const signals: QualitySignal[] = [];
     const lines = diff.split("\n");
 
     let currentFile = "";
+    let skipCurrentFile = false;
     let addedLines: string[] = [];
     let currentFunction = "";
     let functionLineCount = 0;
@@ -37,11 +44,16 @@ export class QualityAnalyzer {
         }
         const match = line.match(DIFF_FILE_PATTERN);
         currentFile = match?.[1] ?? "";
+        skipCurrentFile = this.shouldIgnoreFile(currentFile);
         addedLines = [];
         currentFunction = "";
         functionLineCount = 0;
         maxNesting = 0;
         currentNesting = 0;
+        continue;
+      }
+
+      if (skipCurrentFile) {
         continue;
       }
 

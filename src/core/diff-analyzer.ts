@@ -6,23 +6,23 @@ type DiffHunk = {
   deletions: number;
 };
 
-export class DiffAnalyzer {
-  private static readonly IGNORED_PATTERNS = [
-    /^bun\.lock(b)?$/,
-    /^package-lock\.json$/,
-    /^yarn\.lock$/,
-    /^pnpm-lock\.yaml$/,
-    /^\.env/,
-    /^\.finsliparn\//,
-  ];
+export const IGNORED_FILE_PATTERNS = [
+  /^bun\.lock(b)?$/,
+  /^package-lock\.json$/,
+  /^yarn\.lock$/,
+  /^pnpm-lock\.yaml$/,
+  /^\.env/,
+  /^\.finsliparn\//,
+];
 
+export class DiffAnalyzer {
   private readonly thresholds = {
     lowComplexity: 50,
     mediumComplexity: 150,
   };
 
   private shouldIgnoreFile(file: string): boolean {
-    return DiffAnalyzer.IGNORED_PATTERNS.some((pattern) => pattern.test(file));
+    return IGNORED_FILE_PATTERNS.some((pattern) => pattern.test(file));
   }
 
   async analyze(cwd: string, base?: string): Promise<DiffAnalysis> {
