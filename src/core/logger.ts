@@ -1,9 +1,12 @@
 /**
  * Structured debug logging for Finsliparn
  *
- * Enable with FINSLIPARN_DEBUG=1 environment variable
- * Outputs to stderr to avoid polluting MCP responses
+ * Enable with FINSLIPARN_DEBUG=1 environment variable or --debug flag
+ * Configure log file with FINSLIPARN_LOG_PATH environment variable or --log-path flag
+ * Outputs to stderr (or file) to avoid polluting MCP responses
  */
+
+import { appendFileSync } from "node:fs";
 
 export type LogLevel = "DEBUG" | "INFO" | "WARN" | "ERROR";
 
@@ -16,19 +19,44 @@ const LOG_LEVELS: Record<LogLevel, number> = {
   ERROR: 3,
 };
 
+type LoggerConfig = {
+  debug: boolean;
+  logPath: string | undefined;
+};
+
+const globalConfig: LoggerConfig = {
+  debug: false,
+  logPath: undefined,
+};
+
+export function configureLogger(options: Partial<LoggerConfig>): void {
+  if (options.debug !== undefined) {
+    globalConfig.debug = options.debug;
+  }
+  if (options.logPath !== undefined) {
+    globalConfig.logPath = options.logPath;
+  }
+}
+
 class Logger {
-  private readonly enabled: boolean;
   private readonly minLevel: LogLevel;
   private readonly component: string;
 
   constructor(component: string) {
     this.component = component;
-    this.enabled = process.env.FINSLIPARN_DEBUG === "1";
     this.minLevel = (process.env.FINSLIPARN_LOG_LEVEL as LogLevel) ?? "DEBUG";
   }
 
+  private isEnabled(): boolean {
+    return globalConfig.debug || process.env.FINSLIPARN_DEBUG === "1";
+  }
+
+  private getLogPath(): string | undefined {
+    return globalConfig.logPath ?? process.env.FINSLIPARN_LOG_PATH;
+  }
+
   private shouldLog(level: LogLevel): boolean {
-    if (!this.enabled) {
+    if (!this.isEnabled()) {
       return level === "ERROR";
     }
     return LOG_LEVELS[level] >= LOG_LEVELS[this.minLevel];
@@ -44,27 +72,36 @@ class Logger {
     return `[${timestamp}] [${level}] [${this.component}] ${message}${contextStr}`;
   }
 
+  private output(formattedMessage: string): void {
+    const logPath = this.getLogPath();
+    if (logPath) {
+      appendFileSync(logPath, `${formattedMessage}\n`);
+    } else {
+      console.error(formattedMessage);
+    }
+  }
+
   debug(message: string, context?: LogContext): void {
     if (this.shouldLog("DEBUG")) {
-      console.error(this.formatMessage("DEBUG", message, context));
+      this.output(this.formatMessage("DEBUG", message, context));
     }
   }
 
   info(message: string, context?: LogContext): void {
     if (this.shouldLog("INFO")) {
-      console.error(this.formatMessage("INFO", message, context));
+      this.output(this.formatMessage("INFO", message, context));
     }
   }
 
   warn(message: string, context?: LogContext): void {
     if (this.shouldLog("WARN")) {
-      console.error(this.formatMessage("WARN", message, context));
+      this.output(this.formatMessage("WARN", message, context));
     }
   }
 
   error(message: string, context?: LogContext): void {
     if (this.shouldLog("ERROR")) {
-      console.error(this.formatMessage("ERROR", message, context));
+      this.output(this.formatMessage("ERROR", message, context));
     }
   }
 }

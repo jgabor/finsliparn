@@ -1,9 +1,11 @@
+import { parseArgs } from "node:util";
 import { Server } from "@modelcontextprotocol/sdk/server/index.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import {
   CallToolRequestSchema,
   ListToolsRequestSchema,
 } from "@modelcontextprotocol/sdk/types.js";
+import { configureLogger, createLogger } from "../core/logger";
 import {
   finslipaCancel,
   finslipaCheck,
@@ -14,8 +16,36 @@ import {
   finslipaVote,
 } from "./tools";
 
+const { values: cliArgs } = parseArgs({
+  options: {
+    debug: {
+      type: "boolean",
+      default: false,
+    },
+    "log-path": {
+      type: "string",
+    },
+  },
+  strict: false,
+});
+
+configureLogger({
+  debug: cliArgs.debug,
+  logPath: cliArgs["log-path"],
+});
+
+const log = createLogger("server");
+const VERSION = "1.0.0";
+
+log.info(`Finsliparn v${VERSION} running`, {
+  debug: cliArgs.debug,
+  logPath: cliArgs["log-path"],
+  cwd: process.cwd(),
+  pid: process.pid,
+});
+
 const server = new Server(
-  { name: "finsliparn", version: "1.0.0" },
+  { name: "finsliparn", version: VERSION },
   { capabilities: { tools: { listChanged: true } } }
 );
 
