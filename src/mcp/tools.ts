@@ -713,6 +713,106 @@ export async function finslipaVote(args: {
   }
 }
 
+export async function finslipaCancel(args: {
+  sessionId: string;
+}): Promise<ToolResponse> {
+  const sessionManager = new SessionManager();
+  const worktreeManager = new WorktreeManager();
+
+  try {
+    const session = await sessionManager.loadSession(args.sessionId);
+    if (!session) {
+      return {
+        success: false,
+        message: `Session ${args.sessionId} not found`,
+        error: {
+          code: "SESSION_NOT_FOUND",
+          details: `No session with ID ${args.sessionId}`,
+        },
+      };
+    }
+
+    if (session.status === "completed" || session.status === "cancelled") {
+      return {
+        success: false,
+        message: `Session ${args.sessionId} is already ${session.status}`,
+        error: {
+          code: "SESSION_ALREADY_FINISHED",
+          details: `Cannot cancel a session that is already ${session.status}`,
+        },
+      };
+    }
+
+    log.info("Cancelling session", {
+      sessionId: args.sessionId,
+      currentStatus: session.status,
+      iterations: session.iterations.length,
+    });
+
+    // Clean up worktrees for all iterations that have them
+    for (const iteration of session.iterations) {
+      if (iteration.worktreePath) {
+        const branchName = `finsliparn/${session.id}/iteration-${iteration.iteration}`;
+        try {
+          await worktreeManager.deleteWorktree(branchName);
+          log.debug("Worktree cleaned up", {
+            sessionId: args.sessionId,
+            iteration: iteration.iteration,
+          });
+        } catch (error) {
+          log.warn("Failed to clean up worktree", {
+            sessionId: args.sessionId,
+            iteration: iteration.iteration,
+            error: String(error),
+          });
+        }
+      }
+    }
+
+    await sessionManager.updateSessionStatus(args.sessionId, "cancelled");
+
+    // Clear directive file
+    const directiveWriter = new DirectiveWriter();
+    await directiveWriter.write({
+      session: { ...session, status: "cancelled" },
+      latestIteration: {
+        iteration: session.currentIteration,
+        status: "failed",
+        timestamp: new Date(),
+        score: 0,
+      },
+      nextActions: [
+        "Session cancelled. Start a new session with finslipa_start.",
+      ],
+    });
+
+    return {
+      success: true,
+      message: `Session ${args.sessionId} cancelled`,
+      data: {
+        sessionId: args.sessionId,
+        iterationsCancelled: session.iterations.length,
+        worktreesCleaned: session.iterations.filter((i) => i.worktreePath)
+          .length,
+      },
+      nextSteps: ["Start a new session with finslipa_start when ready"],
+    };
+  } catch (error) {
+    log.error("Cancel failed", {
+      sessionId: args.sessionId,
+      error: String(error),
+    });
+    return {
+      success: false,
+      message: `Failed to cancel session: ${error}`,
+      error: {
+        code: "CANCEL_FAILED",
+        details: String(error),
+      },
+    };
+  }
+}
+
 export async function finslipaMerge(args: {
   sessionId: string;
   iterationNumber?: number;

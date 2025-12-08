@@ -5,6 +5,7 @@ import {
   ListToolsRequestSchema,
 } from "@modelcontextprotocol/sdk/types.js";
 import {
+  finslipaCancel,
   finslipaCheck,
   finslipaMerge,
   finslipaStart,
@@ -117,6 +118,21 @@ server.setRequestHandler(ListToolsRequestSchema, () => ({
         required: ["sessionId"],
       },
     },
+    {
+      name: "finslipa_cancel",
+      description:
+        "Cancel an active refinement session and clean up worktrees.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          sessionId: {
+            type: "string",
+            description: "The session ID to cancel",
+          },
+        },
+        required: ["sessionId"],
+      },
+    },
   ],
 }));
 
@@ -164,6 +180,12 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       const result = await finslipaMerge(
         args as { sessionId: string; iterationNumber?: number }
       );
+      return {
+        content: [{ type: "text", text: JSON.stringify(result, null, 2) }],
+      };
+    }
+    case "finslipa_cancel": {
+      const result = await finslipaCancel(args as { sessionId: string });
       return {
         content: [{ type: "text", text: JSON.stringify(result, null, 2) }],
       };

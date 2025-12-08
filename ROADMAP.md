@@ -136,7 +136,8 @@ See [docs/spec-cc.md](docs/spec-cc.md) for detailed technical specifications.
   - [x] Decompose `finslipaCheck()` into phases
   - [x] Remove `buildNextActions`/`buildNextSteps` duplication
 - [ ] **Missing Tools**
-  - [ ] Implement `finslipa_cancel` tool
+  - [x] Implement `finslipa_cancel` tool
+  - [ ] Implement `finslipa_clean` tool
 
 ## Phase 6: Advanced Features (MVP)
 
