@@ -38,3 +38,6 @@ report.[0-9]_.[0-9]_.[0-9]_.[0-9]_.json
 
 # Claude Code
 .claude/data/sessions
+
+# Random docs
+docs/*/

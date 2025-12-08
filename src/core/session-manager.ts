@@ -12,6 +12,9 @@ const DEFAULT_CONFIG: SessionConfig = {
   maxIterations: 5,
   timeout: 300_000, // 5 min
   parallelExperts: false,
+  maxSolutions: 5,
+  improvingOrder: true,
+  returnBestResult: true,
 };
 
 export class SessionManager {
@@ -116,6 +119,24 @@ export class SessionManager {
     }
     const iter = session.iterations.at(-1);
     return iter ?? null;
+  }
+
+  async updateBestResult(
+    sessionId: string,
+    iteration: number,
+    score: number
+  ): Promise<void> {
+    const session = await this.loadSession(sessionId);
+    if (!session) {
+      throw new Error(`Session ${sessionId} not found`);
+    }
+
+    if (session.bestScore === undefined || score > session.bestScore) {
+      session.bestIteration = iteration;
+      session.bestScore = score;
+      session.updatedAt = new Date();
+      await this.persistSession(session);
+    }
   }
 
   async getActiveSession(): Promise<RefinementSession | null> {

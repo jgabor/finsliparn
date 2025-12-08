@@ -15,6 +15,8 @@ export type RefinementSession = {
   iterations: IterationResult[];
   selectedIteration?: number; // Winner (after voting)
   mergeThreshold?: number; // Score threshold for merge (undefined = disabled)
+  bestIteration?: number; // Tracks best score seen across all iterations
+  bestScore?: number; // Best score value
 };
 
 export type SessionStatus =
@@ -30,6 +32,19 @@ export type SessionConfig = {
   timeout: number; // Default: 300000 (5 min)
   parallelExperts: boolean; // Default: false (PoC)
   mergeThreshold?: number; // Score threshold for merge (0-100, null/undefined = disabled)
+  maxSolutions: number; // Max prior solutions to include in feedback (Default: 5)
+  improvingOrder: boolean; // Show solutions worst→best (Default: true)
+  returnBestResult: boolean; // Track and return best iteration (Default: true)
+  selectionProbability: number; // Probability of including each prior solution (Default: 1.0)
+  shuffleExamples: boolean; // Randomize feedback order per iteration (Default: false)
+  seed?: number; // Seed for deterministic randomness (Default: undefined = random)
+};
+
+// Solution Memory (Poetiq-inspired)
+export type SolutionMemory = {
+  code: string; // Snapshot of changed code
+  feedback: string; // Generated feedback
+  score: number; // Score at time of snapshot
 };
 
 // Iteration Results
@@ -43,6 +58,7 @@ export type IterationResult = {
   commitSha?: string;
   worktreePath?: string;
   feedback?: string; // Markdown feedback
+  solution?: SolutionMemory; // Stored solution for context
 };
 
 // Test Execution Types
@@ -55,6 +71,7 @@ export type TestResults = {
   failures: TestFailure[];
   stdout?: string;
   stderr?: string;
+  softScore?: number; // 0.0-1.0 partial credit based on assertion proximity
 };
 
 export type TestFailure = {
@@ -65,6 +82,7 @@ export type TestFailure = {
   actual?: string;
   message: string;
   stack?: string;
+  softScore?: number; // 0.0-1.0 partial credit for this specific failure
 };
 
 export type TestRunOptions = {
@@ -120,6 +138,7 @@ export type DirectiveContext = {
   history?: IterationSummary[];
   specHints?: string[]; // Paths to spec/reference files for context
   qualityAnalysis?: QualityAnalysis; // Code quality signals and suggestions
+  priorSolutions?: SolutionMemory[]; // Prior solutions for context (Poetiq-style)
 };
 
 export type IterationSummary = {

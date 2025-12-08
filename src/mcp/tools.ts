@@ -1,15 +1,19 @@
 import { readdirSync } from "node:fs";
 import { join } from "node:path";
+import { simpleGit } from "simple-git";
 import { DiffAnalyzer } from "../core/diff-analyzer";
 import { DirectiveWriter } from "../core/directive-writer";
 import { QualityAnalyzer } from "../core/quality-analyzer";
 import { ScoringEngine } from "../core/scoring-engine";
 import { SessionManager } from "../core/session-manager";
+import { SoftScorer } from "../core/soft-scorer";
 import { detectTestRunner } from "../core/test-runner";
+import { WorktreeManager } from "../core/worktree-manager";
 import type {
   DiffAnalysis,
   IterationSummary,
   QualityAnalysis,
+  SolutionMemory,
   TestResults,
   ToolResponse,
 } from "../types";
@@ -179,8 +183,10 @@ export async function finslipaStart(args: {
 // biome-ignore lint/complexity/noExcessiveCognitiveComplexity: Full iteration workflow with test running, analysis, and directive updates
 export async function finslipaCheck(args: {
   sessionId: string;
+  useWorktree?: boolean;
 }): Promise<ToolResponse> {
   const sessionManager = new SessionManager();
+  const worktreeManager = new WorktreeManager();
 
   try {
     const session = await sessionManager.loadSession(args.sessionId);
@@ -211,22 +217,43 @@ export async function finslipaCheck(args: {
     // Update status to iterating
     await sessionManager.updateSessionStatus(args.sessionId, "iterating");
 
+    // Determine working directory (worktree or cwd)
+    const iteration = session.currentIteration + 1;
+    let workingDirectory = process.cwd();
+    let worktreePath: string | undefined;
+
+    if (args.useWorktree) {
+      const branchName = `finsliparn/${session.id}/iteration-${iteration}`;
+      try {
+        worktreePath = await worktreeManager.createWorktree(branchName);
+        workingDirectory = worktreePath;
+      } catch (error) {
+        // Fall back to cwd if worktree creation fails
+        console.warn(`Failed to create worktree, using cwd: ${error}`);
+      }
+    }
+
     // Detect and run tests
     try {
-      const testRunner = await detectTestRunner(process.cwd());
+      const testRunner = await detectTestRunner(workingDirectory);
       const testResults = await testRunner.run({
         timeout: 30_000,
-        cwd: process.cwd(),
+        cwd: workingDirectory,
       });
+
+      // Calculate soft scores for partial credit
+      const softScorer = new SoftScorer();
+      testResults.softScore =
+        softScorer.calculateTestResultsSoftScore(testResults);
 
       // Analyze diff for complexity scoring
       const diffAnalyzer = new DiffAnalyzer();
-      const diffAnalysis = await diffAnalyzer.analyze(process.cwd());
+      const diffAnalysis = await diffAnalyzer.analyze(workingDirectory);
 
       // Analyze code quality when tests pass
       let qualityAnalysis: QualityAnalysis | undefined;
       if (testResults.failed === 0 && testResults.total > 0) {
-        const rawDiff = await diffAnalyzer.getRawDiff(process.cwd());
+        const rawDiff = await diffAnalyzer.getRawDiff(workingDirectory);
         if (rawDiff) {
           const qualityAnalyzer = new QualityAnalyzer();
           qualityAnalysis = qualityAnalyzer.analyze(rawDiff);
@@ -240,8 +267,23 @@ export async function finslipaCheck(args: {
         diffAnalysis
       );
 
+      // Capture solution memory (Poetiq-style)
+      const rawDiff = await diffAnalyzer.getRawDiff(workingDirectory);
+      const softScoreInfo =
+        testResults.softScore !== undefined
+          ? ` (soft score: ${(testResults.softScore * 100).toFixed(1)}%)`
+          : "";
+      const solutionFeedback =
+        testResults.failed > 0
+          ? `${testResults.failed}/${testResults.total} tests failing${softScoreInfo}`
+          : `All ${testResults.total} tests passing`;
+      const solution: SolutionMemory = {
+        code: rawDiff || "(no changes)",
+        feedback: solutionFeedback,
+        score: scoreResult.score,
+      };
+
       // Create iteration result
-      const iteration = session.currentIteration + 1;
       await sessionManager.addIteration(args.sessionId, {
         iteration,
         status: "completed",
@@ -249,7 +291,16 @@ export async function finslipaCheck(args: {
         testResults,
         score: scoreResult.score,
         diff: diffAnalysis,
+        worktreePath,
+        solution,
       });
+
+      // Track best result
+      await sessionManager.updateBestResult(
+        args.sessionId,
+        iteration,
+        scoreResult.score
+      );
 
       // Transition to completed if all tests pass
       const allTestsPassing = testResults.failed === 0 && testResults.total > 0;
@@ -275,6 +326,12 @@ export async function finslipaCheck(args: {
               ? `${iter.testResults.passed}/${iter.testResults.total} tests passing`
               : "No test results",
           }));
+
+        // Collect prior solutions (Poetiq-style)
+        const priorSolutions: SolutionMemory[] = updatedSession.iterations
+          .filter((iter) => iter.solution !== undefined)
+          .map((iter) => iter.solution as SolutionMemory);
+
         const remainingIterations = updatedSession.maxIterations - iteration;
         const nextActions = buildNextActions(
           testResults,
@@ -290,6 +347,8 @@ export async function finslipaCheck(args: {
           history: history.length > 0 ? history : undefined,
           specHints: specHints.length > 0 ? specHints : undefined,
           qualityAnalysis,
+          priorSolutions:
+            priorSolutions.length > 0 ? priorSolutions : undefined,
         });
       }
 
@@ -372,6 +431,7 @@ export async function finslipaStatus(args: {
 export async function finslipaVote(args: {
   sessionId: string;
   strategy?: "highest_score" | "minimal_diff" | "balanced";
+  returnBest?: boolean; // Return tracked best result instead of voting
 }): Promise<ToolResponse> {
   const sessionManager = new SessionManager();
   const strategy = args.strategy ?? "highest_score";
@@ -400,6 +460,24 @@ export async function finslipaVote(args: {
       };
     }
 
+    // Return tracked best if requested and available
+    if (args.returnBest && session.bestIteration !== undefined) {
+      await sessionManager.updateSessionStatus(args.sessionId, "evaluating");
+      return {
+        success: true,
+        message: `Returning best tracked iteration ${session.bestIteration} with score ${session.bestScore}`,
+        data: {
+          selectedIteration: session.bestIteration,
+          score: session.bestScore,
+          strategy: "best_tracked",
+          totalIterations: session.iterations.length,
+        },
+        nextSteps: [
+          `Call finslipa_merge to merge iteration ${session.bestIteration}`,
+        ],
+      };
+    }
+
     const completedIterations = session.iterations.filter(
       (iteration) =>
         iteration.status === "completed" && iteration.score !== undefined
@@ -416,9 +494,37 @@ export async function finslipaVote(args: {
       };
     }
 
-    const winner = completedIterations.reduce((best, current) =>
-      (current.score ?? 0) > (best.score ?? 0) ? current : best
-    );
+    // Select winner based on strategy
+    let winner = completedIterations[0];
+
+    if (strategy === "highest_score") {
+      winner = completedIterations.reduce((best, current) =>
+        (current.score ?? 0) > (best.score ?? 0) ? current : best
+      );
+    } else if (strategy === "minimal_diff") {
+      // Prefer iterations with smallest diff (insertions + deletions)
+      winner = completedIterations.reduce((best, current) => {
+        const bestDiffSize =
+          (best.diff?.insertions ?? 0) + (best.diff?.deletions ?? 0);
+        const currentDiffSize =
+          (current.diff?.insertions ?? 0) + (current.diff?.deletions ?? 0);
+        return currentDiffSize < bestDiffSize ? current : best;
+      });
+    } else if (strategy === "balanced") {
+      // Balance score (70%) with diff size penalty (30%)
+      // Normalize diff size: smaller is better, cap at 500 lines
+      const getDiffPenalty = (iter: (typeof completedIterations)[0]) => {
+        const diffSize =
+          (iter.diff?.insertions ?? 0) + (iter.diff?.deletions ?? 0);
+        return Math.min(diffSize / 500, 1) * 30;
+      };
+      winner = completedIterations.reduce((best, current) => {
+        const bestBalanced = (best.score ?? 0) * 0.7 - getDiffPenalty(best);
+        const currentBalanced =
+          (current.score ?? 0) * 0.7 - getDiffPenalty(current);
+        return currentBalanced > bestBalanced ? current : best;
+      });
+    }
 
     await sessionManager.updateSessionStatus(args.sessionId, "evaluating");
 
@@ -450,6 +556,7 @@ export async function finslipaMerge(args: {
   iterationNumber?: number;
 }): Promise<ToolResponse> {
   const sessionManager = new SessionManager();
+  const worktreeManager = new WorktreeManager();
 
   try {
     const session = await sessionManager.loadSession(args.sessionId);
@@ -497,6 +604,36 @@ export async function finslipaMerge(args: {
       };
     }
 
+    // Perform git merge if worktree was used
+    let mergeResult: string | undefined;
+    if (iteration.worktreePath) {
+      const git = simpleGit(process.cwd());
+      const branchName = `finsliparn/${session.id}/iteration-${targetIteration}`;
+
+      try {
+        // Merge the iteration branch into current branch
+        await git.merge([
+          branchName,
+          "--no-ff",
+          "-m",
+          `Merge finsliparn iteration ${targetIteration} (score: ${iteration.score})`,
+        ]);
+        mergeResult = `Merged branch ${branchName}`;
+
+        // Clean up the worktree
+        await worktreeManager.deleteWorktree(branchName);
+      } catch (error) {
+        return {
+          success: false,
+          message: `Git merge failed: ${error}`,
+          error: {
+            code: "GIT_MERGE_FAILED",
+            details: String(error),
+          },
+        };
+      }
+    }
+
     await sessionManager.updateSessionStatus(args.sessionId, "completed");
 
     return {
@@ -506,6 +643,7 @@ export async function finslipaMerge(args: {
         sessionId: args.sessionId,
         mergedIteration: targetIteration,
         finalScore: iteration.score,
+        mergeResult,
       },
       nextSteps: ["Refinement session complete. Changes are ready."],
     };

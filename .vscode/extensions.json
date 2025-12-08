@@ -1,0 +1,7 @@
+{
+  "recommendations": [
+    "anthropic.claude-code",
+    "biomejs.biome",
+    "oven.bun-vscode"
+  ]
+}

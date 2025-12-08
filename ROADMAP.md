@@ -33,9 +33,10 @@ See [docs/spec-cc.md](docs/spec-cc.md) for detailed technical specifications.
 - [x] **Tool Implementation**
   - [x] `finslipa_start`: Initialize session & directive
   - [x] `finslipa_check`: Run tests, score result, update directive (The "Heartbeat")
-  - [x] `finslipa_vote`: Select best iteration (Stub for Phase 1)
-  - [x] `finslipa_merge`: Merge winning worktree to main
+  - [x] `finslipa_vote`: Select best iteration with strategies (`highest_score`, `minimal_diff`, `balanced`)
+  - [x] `finslipa_merge`: Merge winning worktree to main (with git merge support)
   - [x] `finslipa_status`: Read current state
+  - [x] Wire up `WorktreeManager` in `finslipa_check` (optional via `useWorktree` flag)
 - [x] **Response Formatting**
   - [x] Standardize `ToolResponse` with `nextSteps` guidance
 
@@ -48,6 +49,8 @@ See [docs/spec-cc.md](docs/spec-cc.md) for detailed technical specifications.
 - [x] **Command Handlers**
   - [x] `/finslipa`: Interactive session starter
   - [x] `/finslipa:status`: Quick status check
+  - [x] `/finslipa:check`: Manual iteration trigger
+  - [x] `/finslipa:complete`: Session completion (vote + merge)
 - [x] **Hooks**
   - [x] `PostToolUse`: The "Magic" trigger. Detects edits and injects feedback with session context.
 
@@ -58,6 +61,7 @@ See [docs/spec-cc.md](docs/spec-cc.md) for detailed technical specifications.
 - [x] **Scoring Engine**
   - [x] Calculate pass rate %
   - [x] Implement `DiffAnalyzer` to detect complexity spikes
+  - [ ] Soft scoring (partial credit for almost-correct tests) → moved to Phase 5.5
 - [x] **Feedback Templates**
   - [x] "Failing Tests" section with specific error messages
   - [x] "History" section to prevent repeating mistakes
@@ -88,7 +92,50 @@ See [docs/spec-cc.md](docs/spec-cc.md) for detailed technical specifications.
   - [x] Add quality signals section
   - [x] Show iteration comparison
 
-## Phase 6: Copilot CLI Support (v2.0.0)
+## Phase 5.5: Poetiq Parity (Quality Improvements)
+
+**Goal**: Implement proven patterns from Poetiq's ARC-AGI solver to improve LLM refinement quality.
+
+- [x] **Solution Memory**
+  - [x] Store code+feedback+score for each iteration
+  - [x] Include prior solutions in feedback context
+  - [x] Configurable `max_solutions` limit
+- [x] **Soft Scoring**
+  - [x] Partial credit (0.0-1.0) for test assertions
+  - [x] Use soft scores for ranking failed solutions
+- [x] **Best Result Tracking**
+  - [x] Track best iteration across session
+  - [x] `return_best_result` config option
+- [x] **Feedback Improvements**
+  - [x] Improving order (worst→best) in history
+  - [x] Structured XML feedback format
+  - [x] Visual inline diff (expected/actual)
+- [x] **Configuration**
+  - [x] `selection_probability` for prior solution sampling
+  - [x] `shuffle_examples` for feedback randomization
+  - [x] `seed` for deterministic randomness
+
+## Phase 6: Advanced Features (MVP)
+
+**Goal**: Move from "Single Expert" to "Parallel Exploration".
+
+- [ ] **Parallel Execution**
+  - [ ] Manage multiple worktrees simultaneously
+  - [ ] Seed diversity per expert (`seed += it * max_iterations`)
+- [x] **Voting System**
+  - [x] Implement `finslipa_vote` logic
+  - [x] Strategies: `highest_score`, `minimal_diff`, `balanced`
+  - [ ] Consensus voting (group by identical outputs, count votes)
+  - [ ] Diversity-first ordering
+- [ ] **Dashboard**
+  - [ ] Simple local web UI to visualize the race between experts
+
+## Phase 7: Packaging & Distribution
+
+- **NPM Package**
+- **Claude Plugin**
+
+## Future: Copilot CLI Support (v2.0.0)
 
 **Goal**: Enable the same workflow for GitHub Copilot CLI users.
 
@@ -98,15 +145,3 @@ See [docs/spec-cc.md](docs/spec-cc.md) for detailed technical specifications.
 - [ ] **Platform Adapter**
   - [ ] Ensure `finslipa_check` is idempotent (safe for both Hook and Agent usage)
   - [ ] Verify `directive.md` provides sufficient context for a "blind" agent
-
-## Future: Advanced Features (MVP)
-
-**Goal**: Move from "Single Expert" to "Parallel Exploration".
-
-- [ ] **Parallel Execution**
-  - [ ] Manage multiple worktrees simultaneously
-- [ ] **Voting System**
-  - [ ] Implement `finslipa_vote` logic
-  - [ ] Strategies: `highest_score`, `minimal_diff`, `balanced`
-- [ ] **Dashboard**
-  - [ ] Simple local web UI to visualize the race between experts

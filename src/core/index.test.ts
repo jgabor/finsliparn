@@ -7,6 +7,7 @@ import { DiffAnalyzer } from "./diff-analyzer";
 import { FeedbackGenerator } from "./feedback-generator";
 import { ScoringEngine } from "./scoring-engine";
 import { SessionManager } from "./session-manager";
+import { SoftScorer } from "./soft-scorer";
 import { BunTestRunner } from "./test-runner";
 
 describe("SessionManager", () => {
@@ -283,5 +284,103 @@ describe("DiffAnalyzer", () => {
     expect(result.filesChanged).toEqual([]);
     expect(result.insertions).toBe(0);
     expect(result.deletions).toBe(0);
+  });
+});
+
+describe("SoftScorer", () => {
+  test("should return 1.0 for exact match", () => {
+    const scorer = new SoftScorer();
+    const failure = {
+      name: "test",
+      file: "test.ts",
+      message: "Failed",
+      expected: "hello",
+      actual: "hello",
+    };
+
+    const score = scorer.calculateFailureSoftScore(failure);
+    expect(score).toBe(1.0);
+  });
+
+  test("should return 0 when expected or actual is missing", () => {
+    const scorer = new SoftScorer();
+    const failure = {
+      name: "test",
+      file: "test.ts",
+      message: "Failed",
+    };
+
+    const score = scorer.calculateFailureSoftScore(failure);
+    expect(score).toBe(0);
+  });
+
+  test("should give partial credit for similar strings", () => {
+    const scorer = new SoftScorer();
+    const failure = {
+      name: "test",
+      file: "test.ts",
+      message: "Failed",
+      expected: "hello world",
+      actual: "hello world!",
+    };
+
+    const score = scorer.calculateFailureSoftScore(failure);
+    expect(score).toBeGreaterThan(0.8);
+    expect(score).toBeLessThan(1.0);
+  });
+
+  test("should give partial credit for close numeric values", () => {
+    const scorer = new SoftScorer();
+    const failure = {
+      name: "test",
+      file: "test.ts",
+      message: "Failed",
+      expected: "100",
+      actual: "95",
+    };
+
+    const score = scorer.calculateFailureSoftScore(failure);
+    expect(score).toBeGreaterThan(0.9);
+    expect(score).toBeLessThan(1.0);
+  });
+
+  test("should compare JSON arrays with partial credit", () => {
+    const scorer = new SoftScorer();
+    const failure = {
+      name: "test",
+      file: "test.ts",
+      message: "Failed",
+      expected: "[1, 2, 3]",
+      actual: "[1, 2, 4]",
+    };
+
+    const score = scorer.calculateFailureSoftScore(failure);
+    expect(score).toBeGreaterThan(0.5);
+    expect(score).toBeLessThan(1.0);
+  });
+
+  test("should calculate aggregate soft score for test results", () => {
+    const scorer = new SoftScorer();
+    const results: TestResults = {
+      framework: "bun",
+      passed: 2,
+      failed: 1,
+      total: 3,
+      duration: 100,
+      failures: [
+        {
+          name: "failing test",
+          file: "test.ts",
+          message: "Failed",
+          expected: "hello",
+          actual: "hallo",
+        },
+      ],
+    };
+
+    const softScore = scorer.calculateTestResultsSoftScore(results);
+    expect(softScore).toBeGreaterThan(0.6);
+    expect(softScore).toBeLessThan(1.0);
+    expect(results.failures[0].softScore).toBeDefined();
   });
 });
