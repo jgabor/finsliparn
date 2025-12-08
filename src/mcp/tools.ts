@@ -468,7 +468,7 @@ export async function finslipaCheck(args: {
       let workingDirectory = process.cwd();
       let worktreePath: string | undefined;
 
-      if (args.useWorktree) {
+      if (args.useWorktree ?? true) {
         const worktreeResult = await setupWorktree(
           worktreeManager,
           session.id,
