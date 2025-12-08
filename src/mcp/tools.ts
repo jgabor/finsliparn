@@ -1,4 +1,5 @@
 import { readdirSync } from "node:fs";
+import { unlink } from "node:fs/promises";
 import { join } from "node:path";
 import { simpleGit } from "simple-git";
 import { DiffAnalyzer } from "../core/diff-analyzer";
@@ -1089,6 +1090,9 @@ async function cleanSpecificSession(
     worktreesCleaned,
   });
 
+  const directiveCleaned =
+    await cleanDirectiveIfNoActiveSessions(sessionManager);
+
   return {
     success: true,
     message: `Session ${sessionId} cleaned successfully`,
@@ -1096,8 +1100,12 @@ async function cleanSpecificSession(
       sessionId,
       cleanedStatus: session.status,
       worktreesCleaned,
+      directiveCleaned,
     },
-    nextSteps: ["Session directory and worktrees deleted"],
+    nextSteps: [
+      "Session directory and worktrees deleted",
+      ...(directiveCleaned ? ["directive.md cleaned"] : []),
+    ],
   };
 }
 
@@ -1131,6 +1139,9 @@ async function cleanSessionsByStatus(
     }
   }
 
+  const directiveCleaned =
+    await cleanDirectiveIfNoActiveSessions(sessionManager);
+
   return {
     success: true,
     message: `Cleaned ${cleanedCount} session(s) with status "${targetStatus}"`,
@@ -1138,10 +1149,12 @@ async function cleanSessionsByStatus(
       cleanedCount,
       status: targetStatus,
       worktreesCleaned,
+      directiveCleaned,
       errors: errors.length > 0 ? errors : undefined,
     },
     nextSteps: [
       `${cleanedCount} session directory/directories and ${worktreesCleaned} worktree(s) deleted`,
+      ...(directiveCleaned ? ["directive.md cleaned"] : []),
       ...(errors.length > 0
         ? [`${errors.length} error(s) during cleanup`]
         : []),
@@ -1178,6 +1191,33 @@ async function cleanOrphanedWorktrees(
 
   await worktreeManager.cleanEmptyDirectories();
   return { cleanedCount, errors };
+}
+
+async function cleanDirectiveIfNoActiveSessions(
+  sessionManager: SessionManager
+): Promise<boolean> {
+  const remainingSessions = await sessionManager.listSessions();
+  const activeStatuses = ["initializing", "running", "in_progress"];
+
+  for (const sessionDir of remainingSessions) {
+    try {
+      const session = await sessionManager.loadSession(sessionDir);
+      if (session && activeStatuses.includes(session.status)) {
+        return false;
+      }
+    } catch {
+      // Session load failed, skip
+    }
+  }
+
+  const directivePath = join(process.cwd(), ".finsliparn", "directive.md");
+  try {
+    await unlink(directivePath);
+    log.info("Directive file cleaned", { path: directivePath });
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 async function cleanAllFinishedSessions(
@@ -1217,6 +1257,9 @@ async function cleanAllFinishedSessions(
   worktreesCleaned += orphanedResult.cleanedCount;
   errors.push(...orphanedResult.errors);
 
+  const directiveCleaned =
+    await cleanDirectiveIfNoActiveSessions(sessionManager);
+
   return {
     success: true,
     message: `Cleaned ${cleanedCount} completed/cancelled session(s)`,
@@ -1225,10 +1268,12 @@ async function cleanAllFinishedSessions(
       statuses: cleanableStatuses,
       worktreesCleaned,
       orphanedWorktreesCleaned: orphanedResult.cleanedCount,
+      directiveCleaned,
       errors: errors.length > 0 ? errors : undefined,
     },
     nextSteps: [
       `${cleanedCount} session directory/directories and ${worktreesCleaned} worktree(s) deleted`,
+      ...(directiveCleaned ? ["directive.md cleaned"] : []),
       ...(errors.length > 0
         ? [`${errors.length} error(s) during cleanup`]
         : []),
