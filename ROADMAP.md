@@ -132,9 +132,9 @@ See [docs/spec-cc.md](docs/spec-cc.md) for detailed technical specifications.
 - [x] **Solution Memory Integration**
   - [x] Accumulate `SolutionMemory[]` during iteration loop
   - [x] Pass to FeedbackGenerator as `priorSolutions`
-- [ ] **Code Quality**
-  - [ ] Decompose `finslipaCheck()` into phases
-  - [ ] Remove `buildNextActions`/`buildNextSteps` duplication
+- [x] **Code Quality**
+  - [x] Decompose `finslipaCheck()` into phases
+  - [x] Remove `buildNextActions`/`buildNextSteps` duplication
 - [ ] **Missing Tools**
   - [ ] Implement `finslipa_cancel` tool
 

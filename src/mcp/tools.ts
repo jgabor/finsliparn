@@ -31,45 +31,245 @@ const SPEC_FILENAMES = [
 ];
 const SPEC_DIRECTORIES = [".", "docs"];
 
-function buildNextActions(
-  testResults: TestResults,
-  diffAnalysis: DiffAnalysis,
-  remainingIterations: number
-): string[] {
+type NextStepsContext = {
+  testResults: TestResults;
+  diffAnalysis?: DiffAnalysis;
+  remainingIterations?: number;
+  verbose: boolean;
+};
+
+function buildNextSteps(context: NextStepsContext): string[] {
+  const { testResults, diffAnalysis, remainingIterations, verbose } = context;
   const hasActualTests = testResults.total > 0;
   const allPassing = hasActualTests && testResults.failed === 0;
 
   if (!hasActualTests) {
-    return [
-      "No tests detected - ensure tests exist and run correctly",
-      "Call finslipa_check again after adding tests",
-    ];
+    return verbose
+      ? [
+          "No tests detected - ensure tests exist and run correctly",
+          "Call finslipa_check again after adding tests",
+        ]
+      : ["No tests detected - add tests and run finslipa_check again"];
   }
+
   if (allPassing) {
-    return [
-      "All tests passing!",
-      `Complexity: ${diffAnalysis.complexity}`,
-      "Review the diff for quality improvements, then call finslipa_merge to complete",
-    ];
+    return verbose && diffAnalysis
+      ? [
+          "All tests passing!",
+          `Complexity: ${diffAnalysis.complexity}`,
+          "Review the diff for quality improvements, then call finslipa_merge to complete",
+        ]
+      : ["All tests passing! Call finslipa_merge to complete"];
   }
-  return [
-    `${testResults.failed} test(s) failing`,
-    "Fix the failing tests and call finslipa_check again",
-    `${remainingIterations} iteration(s) remaining`,
-  ];
+
+  return verbose && remainingIterations !== undefined
+    ? [
+        `${testResults.failed} test(s) failing`,
+        "Fix the failing tests and call finslipa_check again",
+        `${remainingIterations} iteration(s) remaining`,
+      ]
+    : ["Fix failing tests and run finslipa_check again"];
 }
 
-function buildNextSteps(testResults: TestResults): string[] {
-  const hasActualTests = testResults.total > 0;
-  const allPassing = hasActualTests && testResults.failed === 0;
+type CheckContext = {
+  sessionId: string;
+  iteration: number;
+  workingDirectory: string;
+  worktreePath?: string;
+};
 
-  if (!hasActualTests) {
-    return ["No tests detected - add tests and run finslipa_check again"];
+type TestPhaseResult = {
+  testResults: TestResults;
+  diffAnalysis: DiffAnalysis;
+  rawDiff: string | null;
+};
+
+type AnalysisPhaseResult = {
+  qualityAnalysis?: QualityAnalysis;
+  scoreResult: { score: number };
+  solution: SolutionMemory;
+};
+
+async function setupWorktree(
+  worktreeManager: WorktreeManager,
+  sessionId: string,
+  iteration: number
+): Promise<{ workingDirectory: string; worktreePath?: string } | ToolResponse> {
+  const branchName = `finsliparn/${sessionId}/iteration-${iteration}`;
+  try {
+    const worktreePath = await worktreeManager.createWorktree(branchName);
+    log.info("Worktree created for iteration", {
+      sessionId,
+      iteration,
+      worktreePath,
+    });
+    return { workingDirectory: worktreePath, worktreePath };
+  } catch (error) {
+    log.error("Worktree creation failed", {
+      sessionId,
+      iteration,
+      branchName,
+      error: String(error),
+    });
+    return {
+      success: false,
+      message: `Failed to create worktree: ${error}`,
+      error: {
+        code: "WORKTREE_CREATION_FAILED",
+        details: `Cannot create isolated worktree for iteration. Ensure git working directory is clean. Error: ${error}`,
+      },
+    };
   }
-  if (allPassing) {
-    return ["All tests passing! Call finslipa_merge to complete"];
+}
+
+async function runTestPhase(
+  context: CheckContext
+): Promise<TestPhaseResult | ToolResponse> {
+  const testRunner = await detectTestRunner(context.workingDirectory);
+  const testResults = await testRunner.run({
+    timeout: 30_000,
+    cwd: context.workingDirectory,
+  });
+
+  const softScorer = new SoftScorer();
+  testResults.softScore = softScorer.calculateTestResultsSoftScore(testResults);
+
+  const diffAnalyzer = new DiffAnalyzer();
+  const diffAnalysis = await diffAnalyzer.analyze(context.workingDirectory);
+
+  if (testResults.total === 0) {
+    log.warn("No tests detected", {
+      sessionId: context.sessionId,
+      iteration: context.iteration,
+    });
+    return {
+      success: false,
+      message: "No tests detected",
+      error: {
+        code: "NO_TESTS_DETECTED",
+        details:
+          "Test runner completed but found 0 tests. Ensure test files exist and follow naming conventions (*.test.ts, *.spec.ts).",
+      },
+    };
   }
-  return ["Fix failing tests and run finslipa_check again"];
+
+  const rawDiff = await diffAnalyzer.getRawDiff(context.workingDirectory);
+  return { testResults, diffAnalysis, rawDiff };
+}
+
+function runAnalysisPhase(testPhase: TestPhaseResult): AnalysisPhaseResult {
+  const { testResults, diffAnalysis, rawDiff } = testPhase;
+
+  let qualityAnalysis: QualityAnalysis | undefined;
+  if (testResults.failed === 0 && testResults.total > 0 && rawDiff) {
+    const qualityAnalyzer = new QualityAnalyzer();
+    qualityAnalysis = qualityAnalyzer.analyze(rawDiff);
+  }
+
+  const scoringEngine = new ScoringEngine();
+  const scoreResult = scoringEngine.calculateScore(testResults, diffAnalysis);
+
+  const softScoreInfo =
+    testResults.softScore !== undefined
+      ? ` (soft score: ${(testResults.softScore * 100).toFixed(1)}%)`
+      : "";
+  const solutionFeedback =
+    testResults.failed > 0
+      ? `${testResults.failed}/${testResults.total} tests failing${softScoreInfo}`
+      : `All ${testResults.total} tests passing`;
+
+  const solution: SolutionMemory = {
+    code: rawDiff || "(no changes)",
+    feedback: solutionFeedback,
+    score: scoreResult.score,
+  };
+
+  return { qualityAnalysis, scoreResult, solution };
+}
+
+async function persistIterationPhase(
+  sessionManager: SessionManager,
+  context: CheckContext,
+  testPhase: TestPhaseResult,
+  analysisPhase: AnalysisPhaseResult
+): Promise<void> {
+  const { testResults, diffAnalysis } = testPhase;
+  const { scoreResult, solution } = analysisPhase;
+
+  await sessionManager.addIteration(context.sessionId, {
+    iteration: context.iteration,
+    status: "completed",
+    timestamp: new Date(),
+    testResults,
+    score: scoreResult.score,
+    diff: diffAnalysis,
+    worktreePath: context.worktreePath,
+    solution,
+  });
+
+  await sessionManager.updateBestResult(
+    context.sessionId,
+    context.iteration,
+    scoreResult.score
+  );
+
+  const allTestsPassing = testResults.failed === 0 && testResults.total > 0;
+  if (allTestsPassing) {
+    await sessionManager.updateSessionStatus(context.sessionId, "completed");
+  }
+}
+
+async function updateDirectivePhase(
+  sessionManager: SessionManager,
+  context: CheckContext,
+  testPhase: TestPhaseResult,
+  analysisPhase: AnalysisPhaseResult
+): Promise<void> {
+  const { testResults, diffAnalysis } = testPhase;
+  const { qualityAnalysis } = analysisPhase;
+
+  const directiveWriter = new DirectiveWriter();
+  const updatedSession = await sessionManager.loadSession(context.sessionId);
+  const latestIteration = await sessionManager.getLatestIteration(
+    context.sessionId
+  );
+
+  if (!(latestIteration && updatedSession)) {
+    return;
+  }
+
+  const history: IterationSummary[] = updatedSession.iterations
+    .filter((iter) => iter.testResults && iter.score !== undefined)
+    .map((iter) => ({
+      iteration: iter.iteration,
+      score: iter.score ?? 0,
+      summary: iter.testResults
+        ? `${iter.testResults.passed}/${iter.testResults.total} tests passing`
+        : "No test results",
+    }));
+
+  const priorSolutions: SolutionMemory[] = updatedSession.iterations
+    .filter((iter) => iter.solution !== undefined)
+    .map((iter) => iter.solution as SolutionMemory);
+
+  const remainingIterations = updatedSession.maxIterations - context.iteration;
+  const nextActions = buildNextSteps({
+    testResults,
+    diffAnalysis,
+    remainingIterations,
+    verbose: true,
+  });
+  const specHints = detectSpecFiles();
+
+  await directiveWriter.write({
+    session: updatedSession,
+    latestIteration,
+    nextActions,
+    history: history.length > 0 ? history : undefined,
+    specHints: specHints.length > 0 ? specHints : undefined,
+    qualityAnalysis,
+    priorSolutions: priorSolutions.length > 0 ? priorSolutions : undefined,
+  });
 }
 
 function selectMinimalDiffWinner(
@@ -214,6 +414,15 @@ export async function finslipaStart(args: {
   }
 }
 
+function isToolResponse(value: unknown): value is ToolResponse {
+  return (
+    typeof value === "object" &&
+    value !== null &&
+    "success" in value &&
+    typeof (value as ToolResponse).success === "boolean"
+  );
+}
+
 export async function finslipaCheck(args: {
   sessionId: string;
   useWorktree?: boolean;
@@ -222,8 +431,6 @@ export async function finslipaCheck(args: {
   const worktreeManager = new WorktreeManager();
 
   try {
-    // Use locking to prevent concurrent modifications
-    // biome-ignore lint/complexity/noExcessiveCognitiveComplexity: Full iteration workflow with test running, analysis, and directive updates
     return await sessionManager.withLock(args.sessionId, async () => {
       const session = await sessionManager.loadSession(args.sessionId);
       if (!session) {
@@ -243,7 +450,6 @@ export async function finslipaCheck(args: {
         maxIterations: session.maxIterations,
       });
 
-      // Safety check: prevent infinite loops
       if (session.currentIteration >= session.maxIterations) {
         await sessionManager.updateSessionStatus(args.sessionId, "failed");
         return {
@@ -256,191 +462,69 @@ export async function finslipaCheck(args: {
         };
       }
 
-      // Update status to iterating
       await sessionManager.updateSessionStatus(args.sessionId, "iterating");
 
-      // Determine working directory (worktree or cwd)
       const iteration = session.currentIteration + 1;
       let workingDirectory = process.cwd();
       let worktreePath: string | undefined;
 
       if (args.useWorktree) {
-        const branchName = `finsliparn/${session.id}/iteration-${iteration}`;
-        try {
-          worktreePath = await worktreeManager.createWorktree(branchName);
-          workingDirectory = worktreePath;
-          log.info("Worktree created for iteration", {
-            sessionId: args.sessionId,
-            iteration,
-            worktreePath,
-          });
-        } catch (error) {
-          log.error("Worktree creation failed", {
-            sessionId: args.sessionId,
-            iteration,
-            branchName,
-            error: String(error),
-          });
-          return {
-            success: false,
-            message: `Failed to create worktree: ${error}`,
-            error: {
-              code: "WORKTREE_CREATION_FAILED",
-              details: `Cannot create isolated worktree for iteration. Ensure git working directory is clean. Error: ${error}`,
-            },
-          };
+        const worktreeResult = await setupWorktree(
+          worktreeManager,
+          session.id,
+          iteration
+        );
+        if (isToolResponse(worktreeResult)) {
+          return worktreeResult;
         }
+        workingDirectory = worktreeResult.workingDirectory;
+        worktreePath = worktreeResult.worktreePath;
       }
 
-      // Detect and run tests
+      const context: CheckContext = {
+        sessionId: args.sessionId,
+        iteration,
+        workingDirectory,
+        worktreePath,
+      };
+
       try {
-        const testRunner = await detectTestRunner(workingDirectory);
-        const testResults = await testRunner.run({
-          timeout: 30_000,
-          cwd: workingDirectory,
-        });
-
-        // Calculate soft scores for partial credit
-        const softScorer = new SoftScorer();
-        testResults.softScore =
-          softScorer.calculateTestResultsSoftScore(testResults);
-
-        // Analyze diff for complexity scoring
-        const diffAnalyzer = new DiffAnalyzer();
-        const diffAnalysis = await diffAnalyzer.analyze(workingDirectory);
-
-        // Validate test results before scoring
-        if (testResults.total === 0) {
-          log.warn("No tests detected", {
-            sessionId: args.sessionId,
-            iteration,
-          });
-          return {
-            success: false,
-            message: "No tests detected",
-            error: {
-              code: "NO_TESTS_DETECTED",
-              details:
-                "Test runner completed but found 0 tests. Ensure test files exist and follow naming conventions (*.test.ts, *.spec.ts).",
-            },
-          };
+        const testPhaseResult = await runTestPhase(context);
+        if (isToolResponse(testPhaseResult)) {
+          return testPhaseResult;
         }
 
-        // Analyze code quality when tests pass
-        let qualityAnalysis: QualityAnalysis | undefined;
-        if (testResults.failed === 0 && testResults.total > 0) {
-          const rawDiff = await diffAnalyzer.getRawDiff(workingDirectory);
-          if (rawDiff) {
-            const qualityAnalyzer = new QualityAnalyzer();
-            qualityAnalysis = qualityAnalyzer.analyze(rawDiff);
-          }
-        }
+        const analysisResult = runAnalysisPhase(testPhaseResult);
 
-        // Calculate score using ScoringEngine with diff analysis
-        const scoringEngine = new ScoringEngine();
-        const scoreResult = scoringEngine.calculateScore(
-          testResults,
-          diffAnalysis
+        await persistIterationPhase(
+          sessionManager,
+          context,
+          testPhaseResult,
+          analysisResult
         );
 
-        // Capture solution memory (Poetiq-style)
-        const rawDiff = await diffAnalyzer.getRawDiff(workingDirectory);
-        const softScoreInfo =
-          testResults.softScore !== undefined
-            ? ` (soft score: ${(testResults.softScore * 100).toFixed(1)}%)`
-            : "";
-        const solutionFeedback =
-          testResults.failed > 0
-            ? `${testResults.failed}/${testResults.total} tests failing${softScoreInfo}`
-            : `All ${testResults.total} tests passing`;
-        const solution: SolutionMemory = {
-          code: rawDiff || "(no changes)",
-          feedback: solutionFeedback,
-          score: scoreResult.score,
-        };
-
-        // Create iteration result
-        await sessionManager.addIteration(args.sessionId, {
-          iteration,
-          status: "completed",
-          timestamp: new Date(),
-          testResults,
-          score: scoreResult.score,
-          diff: diffAnalysis,
-          worktreePath,
-          solution,
-        });
-
-        // Track best result
-        await sessionManager.updateBestResult(
-          args.sessionId,
-          iteration,
-          scoreResult.score
+        await updateDirectivePhase(
+          sessionManager,
+          context,
+          testPhaseResult,
+          analysisResult
         );
-
-        // Transition to completed if all tests pass
-        const allTestsPassing =
-          testResults.failed === 0 && testResults.total > 0;
-        if (allTestsPassing) {
-          await sessionManager.updateSessionStatus(args.sessionId, "completed");
-        }
-
-        // Update directive with feedback - reload session to get updated status
-        const directiveWriter = new DirectiveWriter();
-        const updatedSession = await sessionManager.loadSession(args.sessionId);
-        const latestIteration = await sessionManager.getLatestIteration(
-          args.sessionId
-        );
-
-        if (latestIteration && updatedSession) {
-          // Build history from previous iterations using UPDATED session to prevent repeating mistakes
-          const history: IterationSummary[] = updatedSession.iterations
-            .filter((iter) => iter.testResults && iter.score !== undefined)
-            .map((iter) => ({
-              iteration: iter.iteration,
-              score: iter.score ?? 0,
-              summary: iter.testResults
-                ? `${iter.testResults.passed}/${iter.testResults.total} tests passing`
-                : "No test results",
-            }));
-
-          // Collect prior solutions (Poetiq-style)
-          const priorSolutions: SolutionMemory[] = updatedSession.iterations
-            .filter((iter) => iter.solution !== undefined)
-            .map((iter) => iter.solution as SolutionMemory);
-
-          const remainingIterations = updatedSession.maxIterations - iteration;
-          const nextActions = buildNextActions(
-            testResults,
-            diffAnalysis,
-            remainingIterations
-          );
-          const specHints = detectSpecFiles();
-
-          await directiveWriter.write({
-            session: updatedSession,
-            latestIteration,
-            nextActions,
-            history: history.length > 0 ? history : undefined,
-            specHints: specHints.length > 0 ? specHints : undefined,
-            qualityAnalysis,
-            priorSolutions:
-              priorSolutions.length > 0 ? priorSolutions : undefined,
-          });
-        }
 
         return {
           success: true,
           message: `Iteration ${iteration} completed`,
           data: {
-            passed: testResults.passed,
-            failed: testResults.failed,
-            total: testResults.total,
-            score: scoreResult.score,
-            complexity: diffAnalysis.complexity,
+            passed: testPhaseResult.testResults.passed,
+            failed: testPhaseResult.testResults.failed,
+            total: testPhaseResult.testResults.total,
+            score: analysisResult.scoreResult.score,
+            complexity: testPhaseResult.diffAnalysis.complexity,
             remainingIterations: session.maxIterations - iteration,
           },
-          nextSteps: buildNextSteps(testResults),
+          nextSteps: buildNextSteps({
+            testResults: testPhaseResult.testResults,
+            verbose: false,
+          }),
         };
       } catch (testError) {
         log.error("Test run failed", {
@@ -456,7 +540,7 @@ export async function finslipaCheck(args: {
           },
         };
       }
-    }); // End of withLock callback
+    });
   } catch (error) {
     log.error("Check failed", {
       sessionId: args.sessionId,
