@@ -7,10 +7,23 @@ type DiffHunk = {
 };
 
 export class DiffAnalyzer {
+  private static readonly IGNORED_PATTERNS = [
+    /^bun\.lock(b)?$/,
+    /^package-lock\.json$/,
+    /^yarn\.lock$/,
+    /^pnpm-lock\.yaml$/,
+    /^\.env/,
+    /^\.finsliparn\//,
+  ];
+
   private readonly thresholds = {
     lowComplexity: 50,
     mediumComplexity: 150,
   };
+
+  private shouldIgnoreFile(file: string): boolean {
+    return DiffAnalyzer.IGNORED_PATTERNS.some((pattern) => pattern.test(file));
+  }
 
   async analyze(cwd: string, base?: string): Promise<DiffAnalysis> {
     const hunks = await this.getGitDiffWithFallback(cwd, base);
@@ -94,15 +107,19 @@ export class DiffAnalyzer {
 
   private parseNumstat(output: string): DiffHunk[] {
     const lines = output.trim().split("\n").filter(Boolean);
-    return lines.map((line) => {
-      const parts = line.split("\t");
-      const file = parts[2] ?? "";
-      return {
-        file,
-        insertions: parts[0] === "-" ? 0 : Number.parseInt(parts[0] ?? "0", 10),
-        deletions: parts[1] === "-" ? 0 : Number.parseInt(parts[1] ?? "0", 10),
-      };
-    });
+    return lines
+      .map((line) => {
+        const parts = line.split("\t");
+        const file = parts[2] ?? "";
+        return {
+          file,
+          insertions:
+            parts[0] === "-" ? 0 : Number.parseInt(parts[0] ?? "0", 10),
+          deletions:
+            parts[1] === "-" ? 0 : Number.parseInt(parts[1] ?? "0", 10),
+        };
+      })
+      .filter((hunk) => !this.shouldIgnoreFile(hunk.file));
   }
 
   private calculateComplexity(

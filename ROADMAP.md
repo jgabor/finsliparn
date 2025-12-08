@@ -71,7 +71,7 @@ See [docs/spec-cc.md](docs/spec-cc.md) for detailed technical specifications.
 
 ## Phase 5: Robustness & Quality Feedback
 
-**Goal**: Make the refinement loop robust and provide quality feedback even when tests pass (Poetiq-inspired).
+**Goal**: Make the refinement loop robust and provide quality feedback even when tests pass.
 
 - [x] **Test Parser Fixes**
   - [x] Fix SUMMARY_PATTERN regex to handle Bun's output format
@@ -126,9 +126,12 @@ See [docs/spec-cc.md](docs/spec-cc.md) for detailed technical specifications.
 - [x] **Voting Strategy Fix**
   - [x] Filter to passing iterations before `minimal_diff` selection
   - [x] Add test coverage for edge case
-- [ ] **Solution Memory Integration**
-  - [ ] Accumulate `SolutionMemory[]` during iteration loop
-  - [ ] Pass to FeedbackGenerator as `priorSolutions`
+- [x] **DiffAnalyzer File Filtering**
+  - [x] Add `shouldIgnoreFile()` with static ignore patterns (lock files, `.finsliparn/`)
+  - [x] Filter in `parseNumstat()` before metrics calculation
+- [x] **Solution Memory Integration**
+  - [x] Accumulate `SolutionMemory[]` during iteration loop
+  - [x] Pass to FeedbackGenerator as `priorSolutions`
 - [ ] **Code Quality**
   - [ ] Decompose `finslipaCheck()` into phases
   - [ ] Remove `buildNextActions`/`buildNextSteps` duplication
