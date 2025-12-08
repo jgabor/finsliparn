@@ -960,7 +960,7 @@ export async function finslipaMerge(args: {
       };
     }
 
-    // Perform git merge if worktree was used
+    // Stage changes from worktree without committing
     let mergeResult: string | undefined;
     if (iteration.worktreePath) {
       const git = simpleGit(process.cwd());
@@ -975,14 +975,9 @@ export async function finslipaMerge(args: {
           iteration.score
         );
 
-        // Merge the iteration branch into current branch
-        await git.merge([
-          branchName,
-          "--no-ff",
-          "-m",
-          `Merge finsliparn iteration ${targetIteration} (score: ${iteration.score})`,
-        ]);
-        mergeResult = `Merged branch ${branchName}`;
+        // Merge the iteration branch into current branch without committing
+        await git.merge([branchName, "--no-commit", "--no-ff"]);
+        mergeResult = `Staged changes from branch ${branchName}`;
 
         // Clean up the worktree
         await worktreeManager.deleteWorktree(branchName);
@@ -1002,14 +997,17 @@ export async function finslipaMerge(args: {
 
     return {
       success: true,
-      message: `Session ${args.sessionId} completed successfully`,
+      message: `Session ${args.sessionId} changes staged for review`,
       data: {
         sessionId: args.sessionId,
         mergedIteration: targetIteration,
         finalScore: iteration.score,
         mergeResult,
       },
-      nextSteps: ["Refinement session complete. Changes are ready."],
+      nextSteps: [
+        "Changes are staged but NOT committed - review with `git diff --staged`",
+        `Commit when ready: git commit -m "Merge finsliparn iteration ${targetIteration} (score: ${iteration.score})"`,
+      ],
     };
   } catch (error) {
     return {
