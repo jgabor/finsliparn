@@ -875,13 +875,13 @@ function calculateScore(
 
 | Feature                 | Status | Description                           |
 | ----------------------- | ------ | ------------------------------------- |
-| Session management      | ✅     | Create, track, complete sessions      |
-| Single worktree         | ✅     | One worktree per iteration            |
-| Test-driven feedback    | ✅     | Parse test results, generate feedback |
-| Score tracking          | ✅     | Track improvement across iterations   |
-| **Directive System**    | ✅     | `directive.md` as control plane       |
-| **Complexity Analysis** | ✅     | Basic diff stats and risk scoring     |
-| Plugin commands         | ✅     | /finslipa, /finslipa:status, etc.     |
+| Session management      | ✅      | Create, track, complete sessions      |
+| Single worktree         | ✅      | One worktree per iteration            |
+| Test-driven feedback    | ✅      | Parse test results, generate feedback |
+| Score tracking          | ✅      | Track improvement across iterations   |
+| **Directive System**    | ✅      | `directive.md` as control plane       |
+| **Complexity Analysis** | ✅      | Basic diff stats and risk scoring     |
+| Plugin commands         | ✅      | /finslipa, /finslipa:status, etc.     |
 
 ### 8.2 MVP (Multi-Expert Parallel)
 
@@ -1074,7 +1074,177 @@ describe("Session Lifecycle", () => {
 
 ---
 
-## 13. References
+## 13. Parallel Experts Architecture
+
+This section specifies the architecture for running multiple LLM experts in parallel, each exploring different solution paths with seed diversity.
+
+### 13.1 Design Decisions
+
+| Decision                    | Choice                                                    | Rationale                                 |
+| --------------------------- | --------------------------------------------------------- | ----------------------------------------- |
+| Single-expert directive     | Keep root `.finsliparn/directive.md`                      | Backward compatibility                    |
+| Parallel directive location | `.finsliparn/sessions/{id}/directives/expert-{N}.md`      | Session-scoped isolation                  |
+| Worktree structure          | Nested `finsliparn/{sessionId}/expert-{E}/iteration-{N}`  | Clean hierarchy, easy cleanup             |
+| Expert ID detection         | Auto-detect from worktree path                            | Ergonomic, no explicit parameter needed   |
+| Seed formula                | `baseSeed + expertId * maxIterations`                     | Per Poetiq, ensures diverse exploration   |
+| Race termination            | All experts run to completion                             | Maximize solution diversity before voting |
+| Expert failure              | Continue other experts                                    | Resilience, return best available result  |
+
+### 13.2 Directory Structure (Parallel Mode)
+
+```
+.finsliparn/
+├── directive.md                          # Single-expert mode (unchanged)
+├── sessions/{sessionId}/
+│   ├── state.json                        # mode: "single" | "parallel"
+│   ├── directive.md                      # Single-expert (backward compat)
+│   ├── race.md                           # Parallel: scoreboard (generated at race end)
+│   ├── directives/                       # Parallel only
+│   │   ├── expert-1.md
+│   │   └── expert-2.md
+│   └── iterations/
+│       ├── 1.json                        # Single-expert iterations
+│       └── expert-{E}-{N}.json           # Parallel: expert-scoped iterations
+├── worktrees/finsliparn/{sessionId}/
+│   ├── iteration-{N}                     # Single-expert
+│   └── expert-{E}/iteration-{N}          # Parallel
+```
+
+### 13.3 Type Extensions
+
+```typescript
+type RefinementSession = {
+  // ... existing fields ...
+  mode: "single" | "parallel";
+  expertCount?: number;
+  experts?: ExpertState[];
+};
+
+type ExpertState = {
+  id: number;
+  seed: number;
+  currentIteration: number;
+  bestIteration?: number;
+  bestScore?: number;
+};
+```
+
+### 13.4 Seed Diversity
+
+Each expert receives a deterministic but different seed to ensure diverse exploration paths:
+
+```typescript
+function calculateExpertSeed(baseSeed: number, expertId: number, maxIterations: number): number {
+  return baseSeed + expertId * maxIterations;
+}
+```
+
+This formula (from Poetiq) guarantees that each iteration of each expert gets a unique seed, assuming all configs start with an identical base seed.
+
+### 13.5 Expert ID Auto-Detection
+
+Experts detect their identity from the worktree path they're operating in:
+
+```typescript
+function detectExpertFromPath(worktreePath: string): { expertId: number; iteration: number } | null {
+  // Pattern: .finsliparn/worktrees/finsliparn/{sessionId}/expert-{E}/iteration-{N}
+  const match = worktreePath.match(/expert-(\d+)\/iteration-(\d+)$/);
+  if (!match) return null;
+  return {
+    expertId: parseInt(match[1], 10),
+    iteration: parseInt(match[2], 10),
+  };
+}
+```
+
+### 13.6 Orchestration Flow
+
+```mermaid
+sequenceDiagram
+    participant User
+    participant Orchestrator as Claude (Orchestrator)
+    participant MCP as finslipa_start
+    participant E1 as Expert 1
+    participant E2 as Expert 2
+    participant Vote as finslipa_vote
+
+    User->>Orchestrator: /finslipa "task" --experts 2
+    Orchestrator->>MCP: finslipa_start(task, expertCount: 2)
+    MCP-->>Orchestrator: session created, 2 worktrees, 2 directives
+
+    par Parallel Expert Execution
+        Orchestrator->>E1: Task agent (reads expert-1.md)
+        E1->>E1: Implement → Check → Iterate
+        E1-->>Orchestrator: Expert 1 complete (best score)
+    and
+        Orchestrator->>E2: Task agent (reads expert-2.md)
+        E2->>E2: Implement → Check → Iterate
+        E2-->>Orchestrator: Expert 2 complete (best score)
+    end
+
+    Orchestrator->>Vote: finslipa_vote(session, strategy)
+    Vote-->>Orchestrator: Winner selected
+    Orchestrator->>MCP: finslipa_merge(session)
+    MCP-->>Orchestrator: Solution merged
+    Orchestrator-->>User: Done!
+```
+
+### 13.7 Race Summary (race.md)
+
+Generated at race end to provide visibility into expert performance:
+
+```markdown
+# Race Summary
+
+**Session**: {sessionId}
+**Experts**: 3
+**Status**: VOTING
+
+## Scoreboard
+
+| Expert | Best Score | Iterations | Status |
+|--------|------------|------------|--------|
+| 1 | 100% | 3 | ✅ Converged |
+| 2 | 85% | 5 | ⏹ Max iterations |
+| 3 | 100% | 4 | ✅ Converged |
+
+## Winner Selection
+
+Strategy: `balanced`
+Selected: Expert 1 (100% score, smallest diff: +45/-12)
+```
+
+### 13.8 Tool Updates for Parallel Mode
+
+#### `finslipa_start`
+
+```typescript
+{
+  name: "finslipa_start",
+  inputSchema: {
+    properties: {
+      // ... existing ...
+      expertCount: {
+        type: "number",
+        default: 1,
+        description: "Number of parallel experts (1 = single-expert mode)"
+      }
+    }
+  }
+}
+```
+
+#### `finslipa_check`
+
+Auto-detects expert ID from current working directory. Scopes iteration tracking to that expert.
+
+#### `finslipa_vote`
+
+Extended to collect best iteration from each expert, then apply voting strategy across all experts.
+
+---
+
+## 14. References
 
 1. **Poetiq ARC-AGI Solver**: <https://github.com/poetiq-ai/poetiq-arc-agi-solver>
 2. **Claude Code Plugins**: <https://code.claude.com/docs/en/plugins>

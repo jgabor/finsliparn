@@ -30,8 +30,8 @@ const { values: cliArgs } = parseArgs({
 });
 
 configureLogger({
-  debug: cliArgs.debug,
-  logPath: cliArgs["log-path"],
+  debug: cliArgs.debug === true,
+  logPath: cliArgs["log-path"] as string | undefined,
 });
 
 const log = createLogger("server");

@@ -1379,18 +1379,16 @@ async function cleanOrphanedWorktrees(
 
   for (const worktreePath of allWorktreePaths) {
     const parts = worktreePath.split("/");
-    if (parts.length >= 2) {
-      const sessionId = parts[1];
-      if (!sessionIds.has(sessionId)) {
-        try {
-          await worktreeManager.deleteWorktreeByPath(worktreePath);
-          cleanedCount += 1;
-          log.info("Orphaned worktree cleaned", { worktreePath, sessionId });
-        } catch (error) {
-          errors.push(
-            `Failed to clean orphaned worktree ${worktreePath}: ${error}`
-          );
-        }
+    const sessionId = parts[1];
+    if (sessionId !== undefined && !sessionIds.has(sessionId)) {
+      try {
+        await worktreeManager.deleteWorktreeByPath(worktreePath);
+        cleanedCount += 1;
+        log.info("Orphaned worktree cleaned", { worktreePath, sessionId });
+      } catch (error) {
+        errors.push(
+          `Failed to clean orphaned worktree ${worktreePath}: ${error}`
+        );
       }
     }
   }

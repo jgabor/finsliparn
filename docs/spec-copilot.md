@@ -25,14 +25,14 @@ This approach compensates for Copilot CLI's lack of hook mechanisms (PreToolUse/
 
 ### 1.1 Claude Code vs Copilot CLI Feature Mapping
 
-| Finsliparn Feature | Claude Code | Copilot CLI Adaptation |
-|-------------------|-------------|------------------------|
-| Session kickoff | `/finslipa` slash command | `/agent finsliparn` or `--agent=finsliparn` |
-| Feedback injection | `PostToolUse` hook | Filesystem polling via agent instructions |
-| Progress tracking | Hook-injected messages | `.finsliparn/directive.md` file |
-| MCP tools | Plugin manifest `mcpServers` | `~/.copilot/mcp-config.json` or org-level agent |
-| State persistence | `.finsliparn/sessions/` | Same (filesystem) |
-| Iteration trigger | Automatic via hook | Agent reads directive, calls `finslipa_check` |
+| Finsliparn Feature  | Claude Code                  | Copilot CLI Adaptation                              |
+| ------------------- | ---------------------------- | --------------------------------------------------- |
+| Session kickoff     | `/finslipa` slash command    | `/agent finsliparn` or `--agent=finsliparn`         |
+| Feedback injection  | `PostToolUse` hook           | Filesystem polling via agent instructions           |
+| Progress tracking   | Hook-injected messages       | `.finsliparn/directive.md` file                     |
+| MCP tools           | Plugin manifest `mcpServers` | `~/.copilot/mcp-config.json` or org-level agent     |
+| State persistence   | `.finsliparn/sessions/`      | Same (filesystem)                                   |
+| Iteration trigger   | Automatic via hook           | Agent reads directive, calls `finslipa_check`       |
 
 ### 1.2 Copilot CLI Architecture
 
@@ -487,6 +487,8 @@ Agent: [Calls finslipa_start]
 
 ### 7.2 MVP Multi-Expert Voting Flow
 
+> **Note**: Copilot CLI runs experts sequentially (see Section 11 for details).
+
 ```
 $ copilot --agent=finsliparn
 
@@ -494,13 +496,14 @@ You: Implement binary search tree with self-balancing
 
 Agent: [Calls finslipa_start with expertCount: 3]
 
-       Starting 3 parallel expert sessions...
+       Starting 3 expert sessions (sequential execution)...
 
-       [Each worktree gets independent implementation attempts]
+       [Works through each expert's worktree in sequence]
+       [Expert 1: implement → check → iterate until complete]
+       [Expert 2: implement → check → iterate until complete]
+       [Expert 3: implement → check → iterate until complete]
 
-       [After all experts complete or max iterations reached]
-
-       [Reads directive - shows VOTING]
+       [Reads race.md - all experts complete, shows VOTING]
 
        Comparing solutions:
        | Expert | Score | Tests | Diff Size |
@@ -522,16 +525,16 @@ Agent: [Calls finslipa_start with expertCount: 3]
 
 ## 8. Feature Comparison
 
-| Feature | Claude Code | Copilot CLI (Adapted) |
-|---------|-------------|----------------------|
-| Automatic feedback injection | ✅ PostToolUse hook | ✅ Directive file polling |
-| No manual iteration trigger | ✅ Hook-driven | ✅ Agent instructions |
-| Custom slash commands | ✅ `/finslipa` | ⚠️ `/agent finsliparn` |
-| MCP tools | ✅ Full support | ✅ Full support |
-| Worktree management | ✅ Native | ✅ Via shell commands |
-| Multi-expert parallel | 🔜 MVP | 🔜 MVP (worktrees) |
-| Real-time dashboard | 🔜 MVP | ❌ Not feasible |
-| Session resume | ✅ Native | ✅ Via `--resume` flag |
+| Feature                          | Claude Code               | Copilot CLI (Adapted)           |
+| -------------------------------- | ------------------------- | ------------------------------- |
+| Automatic feedback injection     | ✅ PostToolUse hook       | ✅ Directive file polling       |
+| No manual iteration trigger      | ✅ Hook-driven            | ✅ Agent instructions           |
+| Custom slash commands            | ✅ `/finslipa`            | ⚠️ `/agent finsliparn`          |
+| MCP tools                        | ✅ Full support           | ✅ Full support                 |
+| Worktree management              | ✅ Native                 | ✅ Via shell commands           |
+| Multi-expert                     | 🔜 MVP (parallel)         | 🔜 MVP (sequential)             |
+| Real-time dashboard              | 🔜 MVP                    | ❌ Not feasible                 |
+| Session resume                   | ✅ Native                 | ✅ Via `--resume` flag          |
 
 ---
 
@@ -600,6 +603,82 @@ copilot --agent=finsliparn \
 - [ ] npm package with `bunx finsliparn-mcp` support
 - [ ] GitHub Marketplace listing for org-level agent
 - [ ] Integration tests with actual Copilot CLI
+
+---
+
+## 11. Parallel Experts: Copilot CLI Adaptations
+
+> **Prerequisite**: See `spec-cc.md` Section 13 for the authoritative parallel experts architecture, including design decisions, directory structure, type extensions, seed diversity formula, and tool updates.
+
+This section specifies only the Copilot CLI-specific orchestration details.
+
+### 11.1 Orchestration Differences
+
+Unlike Claude Code (which can use parallel Task agents), Copilot CLI orchestrates experts **sequentially** within a single agent context:
+
+| Aspect              | Claude Code              | Copilot CLI                      |
+| ------------------- | ------------------------ | -------------------------------- |
+| Expert execution    | Parallel Task agents     | Sequential within single agent   |
+| Orchestration       | Claude spawns subagents  | Agent iterates through worktrees |
+| Progress visibility | Agent receives reports   | Agent polls `race.md`            |
+
+### 11.2 Sequential Expert Flow
+
+```mermaid
+sequenceDiagram
+    participant User
+    participant Agent as Copilot Agent
+    participant MCP as MCP Server
+
+    User->>Agent: copilot --agent=finsliparn "task"
+    Agent->>MCP: finslipa_start(task, expertCount: 2)
+    MCP-->>Agent: session created, 2 worktrees, 2 directives
+
+    loop For each expert
+        Agent->>Agent: cd expert-{N}/iteration-1
+        Agent->>Agent: Read directive, implement
+        loop Until expert complete
+            Agent->>MCP: finslipa_check (auto-detects expert)
+            Agent->>Agent: Read feedback, iterate
+        end
+    end
+
+    Agent->>MCP: finslipa_vote(session, strategy)
+    Agent->>MCP: finslipa_merge(session)
+    Agent-->>User: Done!
+```
+
+### 11.3 Agent Profile Updates for Parallel Mode
+
+Add to `.github/agents/finsliparn.agent.md`:
+
+```markdown
+## Parallel Expert Mode
+
+When `finslipa_start` returns multiple worktrees:
+
+1. Read `race.md` for expert list and status
+2. For each incomplete expert:
+   a. `cd` to expert's worktree
+   b. Read expert's directive: `.finsliparn/sessions/{id}/directives/expert-{N}.md`
+   c. Implement and iterate until expert converges or hits max iterations
+3. After all experts complete, call `finslipa_vote`
+4. Call `finslipa_merge` with selected winner
+
+### CRITICAL for Parallel Mode
+- Each expert works in its OWN worktree directory
+- Expert ID is auto-detected from your current working directory
+- Do NOT mix changes between expert worktrees
+- Poll `race.md` to track overall progress
+```
+
+### 11.4 Limitations
+
+| Limitation           | Impact               | Mitigation                     |
+| -------------------- | -------------------- | ------------------------------ |
+| Sequential execution | Slower than parallel | Optimize per-expert iterations |
+| Single context       | Memory constraints   | Summarize between experts      |
+| No true parallelism  | Cannot race experts  | Focus on diversity via seeds   |
 
 ---
 
