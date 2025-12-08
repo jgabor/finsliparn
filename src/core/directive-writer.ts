@@ -1,7 +1,30 @@
 import { mkdir } from "node:fs/promises";
 import { join } from "node:path";
-import type { DirectiveContext } from "../types";
+import type {
+  DirectiveContext,
+  IterationResult,
+  RefinementSession,
+} from "../types";
 import { FeedbackGenerator } from "./feedback-generator";
+
+function isMergeEligible(
+  session: RefinementSession,
+  latestIteration: IterationResult
+): { canMerge: boolean; completedIterations: number } {
+  const completedIterations = session.iterations.filter(
+    (iter) => iter.status === "completed" && iter.score !== undefined
+  ).length;
+
+  const isPerfectScore =
+    latestIteration.score === 100 &&
+    latestIteration.testResults?.failed === 0 &&
+    (latestIteration.testResults?.passed ?? 0) > 0;
+
+  return {
+    canMerge: completedIterations >= 2 || isPerfectScore,
+    completedIterations,
+  };
+}
 
 export class DirectiveWriter {
   private readonly finsliparnDir: string;
@@ -39,6 +62,23 @@ export class DirectiveWriter {
     // Score
     if (latestIteration.score !== undefined) {
       content += `**Score**: ${latestIteration.score}%\n\n`;
+    }
+
+    // Merge eligibility warning
+    const eligibility = isMergeEligible(session, latestIteration);
+    if (!eligibility.canMerge) {
+      const allTestsPassing =
+        latestIteration.testResults?.failed === 0 &&
+        (latestIteration.testResults?.total ?? 0) > 0;
+
+      if (allTestsPassing) {
+        content += "## ⚠️ Important\n\n";
+        content +=
+          "- DO NOT call `finslipa_merge` until score reaches 100% OR 2+ iterations complete\n";
+        content +=
+          "- DO NOT manually merge with git - use `finslipa_merge` to ensure proper tracking\n";
+        content += `- Current: Score ${latestIteration.score}% | Iterations ${eligibility.completedIterations}/2 minimum | Remaining ${session.maxIterations - latestIteration.iteration}\n\n`;
+      }
     }
 
     // Task description

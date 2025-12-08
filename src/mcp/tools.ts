@@ -6,7 +6,7 @@ import { DiffAnalyzer } from "../core/diff-analyzer";
 import { DirectiveWriter } from "../core/directive-writer";
 import { createLogger } from "../core/logger";
 import { QualityAnalyzer } from "../core/quality-analyzer";
-import { ScoringEngine } from "../core/scoring-engine";
+import { type ScoreResult, ScoringEngine } from "../core/scoring-engine";
 import { SessionManager } from "../core/session-manager";
 import { SoftScorer } from "../core/soft-scorer";
 import { detectTestRunner } from "../core/test-runner";
@@ -15,7 +15,9 @@ import type {
   DiffAnalysis,
   IterationResult,
   IterationSummary,
+  MergeEligibility,
   QualityAnalysis,
+  RefinementSession,
   SolutionMemory,
   TestResults,
   ToolResponse,
@@ -32,15 +34,92 @@ const SPEC_FILENAMES = [
 ];
 const SPEC_DIRECTORIES = [".", "docs"];
 
+function checkMergeEligibility(
+  session: RefinementSession,
+  latestIteration: IterationResult
+): MergeEligibility {
+  const completedIterations = session.iterations.filter(
+    (iter) => iter.status === "completed" && iter.score !== undefined
+  ).length;
+
+  const isPerfectScore =
+    latestIteration.score === 100 &&
+    latestIteration.testResults?.failed === 0 &&
+    (latestIteration.testResults?.passed ?? 0) > 0;
+
+  const canMerge = completedIterations >= 2 || isPerfectScore;
+
+  let reason: string;
+  if (canMerge) {
+    reason = isPerfectScore
+      ? "Perfect score achieved"
+      : `${completedIterations} iterations completed`;
+  } else if (latestIteration.score === 100) {
+    reason = `Need ${2 - completedIterations} more iteration(s) for comparison`;
+  } else {
+    reason = `Score ${latestIteration.score}% (need 100% for early merge, or ${2 - completedIterations} more iteration(s))`;
+  }
+
+  return { canMerge, reason, isPerfectScore, completedIterations };
+}
+
 type NextStepsContext = {
   testResults: TestResults;
   diffAnalysis?: DiffAnalysis;
   remainingIterations?: number;
   verbose: boolean;
+  session?: RefinementSession;
+  latestIteration?: IterationResult;
 };
 
+function buildMergeReadySteps(
+  verbose: boolean,
+  diffAnalysis?: DiffAnalysis
+): string[] {
+  if (verbose && diffAnalysis) {
+    return [
+      "All tests passing!",
+      `Complexity: ${diffAnalysis.complexity}`,
+      "Review the diff for quality improvements, then call finslipa_merge to complete",
+    ];
+  }
+  return ["All tests passing! Call finslipa_merge to complete"];
+}
+
+function buildContinueIteratingSteps(
+  eligibility: MergeEligibility,
+  diffAnalysis?: DiffAnalysis,
+  remainingIterations?: number
+): string[] {
+  const steps = [
+    `Tests passing but ${eligibility.reason}`,
+    `Completed: ${eligibility.completedIterations}/2 minimum iterations`,
+  ];
+
+  if (diffAnalysis?.complexity === "high") {
+    steps.push(
+      "Complexity is HIGH - refactor to reduce complexity and improve score"
+    );
+  }
+
+  if (remainingIterations !== undefined && remainingIterations > 0) {
+    steps.push(
+      `${remainingIterations} iteration(s) remaining - continue refining, then call finslipa_check`
+    );
+  }
+
+  return steps;
+}
+
 function buildNextSteps(context: NextStepsContext): string[] {
-  const { testResults, diffAnalysis, remainingIterations, verbose } = context;
+  const {
+    testResults,
+    diffAnalysis,
+    remainingIterations,
+    verbose,
+    session,
+    latestIteration,
+  } = context;
   const hasActualTests = testResults.total > 0;
   const allPassing = hasActualTests && testResults.failed === 0;
 
@@ -54,13 +133,18 @@ function buildNextSteps(context: NextStepsContext): string[] {
   }
 
   if (allPassing) {
-    return verbose && diffAnalysis
-      ? [
-          "All tests passing!",
-          `Complexity: ${diffAnalysis.complexity}`,
-          "Review the diff for quality improvements, then call finslipa_merge to complete",
-        ]
-      : ["All tests passing! Call finslipa_merge to complete"];
+    if (session && latestIteration) {
+      const eligibility = checkMergeEligibility(session, latestIteration);
+      if (eligibility.canMerge) {
+        return buildMergeReadySteps(verbose, diffAnalysis);
+      }
+      return buildContinueIteratingSteps(
+        eligibility,
+        diffAnalysis,
+        remainingIterations
+      );
+    }
+    return buildMergeReadySteps(verbose, diffAnalysis);
   }
 
   return verbose && remainingIterations !== undefined
@@ -87,7 +171,7 @@ type TestPhaseResult = {
 
 type AnalysisPhaseResult = {
   qualityAnalysis?: QualityAnalysis;
-  scoreResult: { score: number };
+  scoreResult: ScoreResult;
   solution: SolutionMemory;
 };
 
@@ -214,16 +298,19 @@ async function persistIterationPhase(
   const { testResults, diffAnalysis } = testPhase;
   const { scoreResult, solution } = analysisPhase;
 
-  await sessionManager.addIteration(context.sessionId, {
+  const iterationResult: IterationResult = {
     iteration: context.iteration,
     status: "completed",
     timestamp: new Date(),
     testResults,
     score: scoreResult.score,
+    scoreBreakdown: scoreResult.breakdown,
     diff: diffAnalysis,
     worktreePath: context.worktreePath,
     solution,
-  });
+  };
+
+  await sessionManager.addIteration(context.sessionId, iterationResult);
 
   await sessionManager.updateBestResult(
     context.sessionId,
@@ -231,8 +318,13 @@ async function persistIterationPhase(
     scoreResult.score
   );
 
-  const allTestsPassing = testResults.failed === 0 && testResults.total > 0;
-  if (allTestsPassing) {
+  const updatedSession = await sessionManager.loadSession(context.sessionId);
+  if (!updatedSession) {
+    return;
+  }
+
+  const eligibility = checkMergeEligibility(updatedSession, iterationResult);
+  if (eligibility.canMerge) {
     await sessionManager.updateSessionStatus(context.sessionId, "completed");
   }
 }
@@ -276,6 +368,8 @@ async function updateDirectivePhase(
     diffAnalysis,
     remainingIterations,
     verbose: true,
+    session: updatedSession,
+    latestIteration,
   });
   const specHints = detectSpecFiles();
 
@@ -469,6 +563,56 @@ function isToolResponse(value: unknown): value is ToolResponse {
   );
 }
 
+type CheckSuccessContext = {
+  sessionManager: SessionManager;
+  sessionId: string;
+  iteration: number;
+  maxIterations: number;
+  testPhaseResult: TestPhaseResult;
+  analysisResult: AnalysisPhaseResult;
+};
+
+async function buildCheckSuccessResponse(
+  ctx: CheckSuccessContext
+): Promise<ToolResponse> {
+  const { sessionManager, sessionId, iteration, maxIterations } = ctx;
+  const { testPhaseResult, analysisResult } = ctx;
+
+  const updatedSession = await sessionManager.loadSession(sessionId);
+  const latestIteration = await sessionManager.getLatestIteration(sessionId);
+
+  const mergeEligibility =
+    updatedSession && latestIteration
+      ? checkMergeEligibility(updatedSession, latestIteration)
+      : undefined;
+
+  const remainingIterations = maxIterations - iteration;
+
+  return {
+    success: true,
+    message: `Iteration ${iteration} completed`,
+    data: {
+      passed: testPhaseResult.testResults.passed,
+      failed: testPhaseResult.testResults.failed,
+      total: testPhaseResult.testResults.total,
+      score: analysisResult.scoreResult.score,
+      scoreBreakdown: analysisResult.scoreResult.breakdown,
+      complexity: testPhaseResult.diffAnalysis.complexity,
+      remainingIterations,
+      mergeEligible: mergeEligibility?.canMerge ?? false,
+      mergeReason: mergeEligibility?.reason,
+    },
+    nextSteps: buildNextSteps({
+      testResults: testPhaseResult.testResults,
+      diffAnalysis: testPhaseResult.diffAnalysis,
+      remainingIterations,
+      verbose: false,
+      session: updatedSession ?? undefined,
+      latestIteration: latestIteration ?? undefined,
+    }),
+  };
+}
+
 export async function finslipaCheck(args: {
   sessionId: string;
   useWorktree?: boolean;
@@ -556,22 +700,14 @@ export async function finslipaCheck(args: {
           analysisResult
         );
 
-        return {
-          success: true,
-          message: `Iteration ${iteration} completed`,
-          data: {
-            passed: testPhaseResult.testResults.passed,
-            failed: testPhaseResult.testResults.failed,
-            total: testPhaseResult.testResults.total,
-            score: analysisResult.scoreResult.score,
-            complexity: testPhaseResult.diffAnalysis.complexity,
-            remainingIterations: session.maxIterations - iteration,
-          },
-          nextSteps: buildNextSteps({
-            testResults: testPhaseResult.testResults,
-            verbose: false,
-          }),
-        };
+        return buildCheckSuccessResponse({
+          sessionManager,
+          sessionId: args.sessionId,
+          iteration,
+          maxIterations: session.maxIterations,
+          testPhaseResult,
+          analysisResult,
+        });
       } catch (testError) {
         log.error("Test run failed", {
           sessionId: args.sessionId,

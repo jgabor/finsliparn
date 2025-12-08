@@ -1,4 +1,10 @@
-import type { DiffAnalysis, ScoreWeights, TestResults } from "../types";
+import type {
+  DiffAnalysis,
+  ScoreBreakdown,
+  ScorePenalty,
+  ScoreWeights,
+  TestResults,
+} from "../types";
 
 const DEFAULT_WEIGHTS: ScoreWeights = {
   testPass: 1.0,
@@ -8,10 +14,7 @@ const DEFAULT_WEIGHTS: ScoreWeights = {
 export type ScoreResult = {
   score: number;
   passRate: number;
-  breakdown: {
-    testPassScore: number;
-    complexityPenalty: number;
-  };
+  breakdown: ScoreBreakdown;
 };
 
 export class ScoringEngine {
@@ -32,29 +35,59 @@ export class ScoringEngine {
     testResults: TestResults,
     diffAnalysis?: DiffAnalysis
   ): ScoreResult {
-    const passRate = this.calculatePassRate(testResults);
-    const testPassScore = passRate * this.weights.testPass;
+    const testPassRate = this.calculatePassRate(testResults);
+    const testPassScore = testPassRate * this.weights.testPass;
+    const penalties: ScorePenalty[] = [];
 
-    let complexityPenalty = 0;
+    let totalPenalty = 0;
+
     if (diffAnalysis) {
-      complexityPenalty =
-        diffAnalysis.complexityScore * this.weights.complexityPenalty;
+      const complexityDeduction = Math.round(
+        diffAnalysis.complexityScore * this.weights.complexityPenalty
+      );
+      if (complexityDeduction > 0) {
+        penalties.push({
+          reason: `High complexity (${diffAnalysis.complexity})`,
+          deduction: complexityDeduction,
+          details: `${diffAnalysis.insertions + diffAnalysis.deletions} changes across ${diffAnalysis.filesChanged.length} files`,
+        });
+        totalPenalty += complexityDeduction;
+      }
     }
 
-    const rawScore = testPassScore - complexityPenalty;
-    const score = Math.max(0, Math.min(100, Math.round(rawScore)));
+    if (testPassRate < 100) {
+      const failedTests = testResults.total - testResults.passed;
+      const testPenalty = Math.round(100 - testPassRate);
+      penalties.push({
+        reason: "Failing tests",
+        deduction: testPenalty,
+        details: `${failedTests} of ${testResults.total} tests failing`,
+      });
+    }
+
+    const rawScore = testPassScore - totalPenalty;
+    const final = Math.max(0, Math.min(100, Math.round(rawScore)));
 
     return {
-      score,
-      passRate: Math.round(passRate * 100) / 100,
+      score: final,
+      passRate: Math.round(testPassRate * 100) / 100,
       breakdown: {
-        testPassScore: Math.round(testPassScore * 100) / 100,
-        complexityPenalty: Math.round(complexityPenalty * 100) / 100,
+        base: 100,
+        testPassRate: Math.round(testPassRate * 100) / 100,
+        penalties,
+        final,
       },
     };
   }
 
   getScore(testResults: TestResults, diffAnalysis?: DiffAnalysis): number {
     return this.calculateScore(testResults, diffAnalysis).score;
+  }
+
+  getBreakdown(
+    testResults: TestResults,
+    diffAnalysis?: DiffAnalysis
+  ): ScoreBreakdown {
+    return this.calculateScore(testResults, diffAnalysis).breakdown;
   }
 }

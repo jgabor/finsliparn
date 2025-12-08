@@ -139,7 +139,23 @@ See [docs/spec-cc.md](docs/spec-cc.md) for detailed technical specifications.
   - [x] Implement `finslipa_cancel` tool
   - [x] Implement `finslipa_clean` tool
 
-## Phase 6: Advanced Features (MVP)
+## Phase 6: Iteration Guard Rails
+
+**Goal**: Prevent LLMs from skipping iterations when score hasn't improved or reached 100%.
+
+- [x] **Merge Eligibility Enforcement**
+  - [x] Extract shared `checkMergeEligibility()` function
+  - [x] Only suggest merge in `buildNextSteps` when eligible (2+ iterations OR perfect score)
+  - [x] Fix session status logic (only set "completed" when merge-eligible)
+- [x] **Score Breakdown**
+  - [x] Add `ScoreBreakdown` type with penalties array
+  - [x] Return actionable breakdown in `finslipa_check` response
+  - [x] Include `mergeEligible` and `mergeReason` in response
+- [x] **Anti-Bypass Warning**
+  - [x] Add warning to directive when tests pass but not merge-eligible
+  - [x] Explicit guidance: "DO NOT manually merge with git"
+
+## Milestone: Parallel Experts
 
 **Goal**: Move from "Single Expert" to "Parallel Exploration".
 
@@ -154,7 +170,7 @@ See [docs/spec-cc.md](docs/spec-cc.md) for detailed technical specifications.
 - [ ] **Dashboard**
   - [ ] Simple local web UI to visualize the race between experts
 
-## Phase 7: Packaging & Distribution
+## Milestone: Packaging & Distribution
 
 - **NPM Package**
 - **Claude Plugin**

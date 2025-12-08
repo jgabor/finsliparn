@@ -54,6 +54,7 @@ export type IterationResult = {
   timestamp: Date;
   testResults?: TestResults;
   score?: number; // 0-100
+  scoreBreakdown?: ScoreBreakdown;
   diff?: DiffAnalysis;
   commitSha?: string;
   worktreePath?: string;
@@ -127,6 +128,26 @@ export type QualitySignal = {
 export type ScoreWeights = {
   testPass: number; // Weight for passing tests
   complexityPenalty: number; // Penalty for excessive changes
+};
+
+export type ScorePenalty = {
+  reason: string;
+  deduction: number;
+  details?: string;
+};
+
+export type ScoreBreakdown = {
+  base: number;
+  testPassRate: number;
+  penalties: ScorePenalty[];
+  final: number;
+};
+
+export type MergeEligibility = {
+  canMerge: boolean;
+  reason: string;
+  isPerfectScore: boolean;
+  completedIterations: number;
 };
 
 // Directive Types

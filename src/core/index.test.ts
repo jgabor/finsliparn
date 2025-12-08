@@ -195,8 +195,10 @@ describe("ScoringEngine", () => {
     const result = engine.calculateScore(testResults);
     expect(result.score).toBe(80);
     expect(result.passRate).toBe(80);
-    expect(result.breakdown.testPassScore).toBe(80);
-    expect(result.breakdown.complexityPenalty).toBe(0);
+    expect(result.breakdown.testPassRate).toBe(80);
+    expect(
+      result.breakdown.penalties.filter((p) => p.reason.includes("complexity"))
+    ).toHaveLength(0);
   });
 
   test("should apply complexity penalty from diff analysis", () => {
@@ -219,7 +221,10 @@ describe("ScoringEngine", () => {
 
     const result = engine.calculateScore(testResults, diffAnalysis);
     expect(result.score).toBe(95);
-    expect(result.breakdown.complexityPenalty).toBe(5);
+    const complexityPenalty = result.breakdown.penalties.find((p) =>
+      p.reason.includes("complexity")
+    );
+    expect(complexityPenalty?.deduction).toBe(5);
   });
 
   test("should use getScore helper method", () => {
@@ -257,7 +262,10 @@ describe("ScoringEngine", () => {
 
     const result = engine.calculateScore(testResults, diffAnalysis);
     expect(result.score).toBe(90);
-    expect(result.breakdown.complexityPenalty).toBe(10);
+    const complexityPenalty = result.breakdown.penalties.find((p) =>
+      p.reason.includes("complexity")
+    );
+    expect(complexityPenalty?.deduction).toBe(10);
   });
 });
 
