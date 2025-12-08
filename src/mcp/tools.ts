@@ -857,14 +857,20 @@ export async function finslipaMerge(args: {
       (iter) => iter.status === "completed" && iter.score !== undefined
     );
 
-    if (completedIterations.length < 2) {
+    // Allow early exit on perfect score (100% score, all tests pass, at least one test ran)
+    const isPerfectScore =
+      iteration.score === 100 &&
+      iteration.testResults?.failed === 0 &&
+      (iteration.testResults?.passed ?? 0) > 0;
+
+    if (completedIterations.length < 2 && !isPerfectScore) {
       return {
         success: false,
-        message: `Cannot merge with only ${completedIterations.length} completed iteration(s). At least 2 are required for comparison.`,
+        message: `Cannot merge with only ${completedIterations.length} completed iteration(s). At least 2 are required for comparison (unless perfect score).`,
         error: {
           code: "INSUFFICIENT_ITERATIONS",
           details:
-            "Complete at least 2 iterations before merging to ensure meaningful comparison",
+            "Complete at least 2 iterations before merging to ensure meaningful comparison, or achieve a perfect score (100%, all tests pass)",
         },
       };
     }

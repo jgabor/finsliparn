@@ -202,7 +202,7 @@ export class FeedbackGenerator {
       feedback += this.generateQualitySection(qualityAnalysis);
     }
 
-    // Prior solutions section (Poetiq-style)
+    // Prior solutions section
     if (priorSolutions && priorSolutions.length > 0) {
       feedback += this.generateSolutionsSection(priorSolutions);
     } else if (history && history.length > 0) {

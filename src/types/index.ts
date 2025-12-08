@@ -40,7 +40,7 @@ export type SessionConfig = {
   seed?: number; // Seed for deterministic randomness (Default: undefined = random)
 };
 
-// Solution Memory (Poetiq-inspired)
+// Solution Memory
 export type SolutionMemory = {
   code: string; // Snapshot of changed code
   feedback: string; // Generated feedback
@@ -138,7 +138,7 @@ export type DirectiveContext = {
   history?: IterationSummary[];
   specHints?: string[]; // Paths to spec/reference files for context
   qualityAnalysis?: QualityAnalysis; // Code quality signals and suggestions
-  priorSolutions?: SolutionMemory[]; // Prior solutions for context (Poetiq-style)
+  priorSolutions?: SolutionMemory[]; // Prior solutions for context
 };
 
 export type IterationSummary = {
