@@ -28,7 +28,13 @@ export class DirectiveWriter {
     // Status
     content += `**Status**: ${session.status.toUpperCase()}\n`;
     content += `**Session ID**: ${session.id}\n`;
-    content += `**Iteration**: ${latestIteration.iteration}/${session.maxIterations}\n\n`;
+    content += `**Iteration**: ${latestIteration.iteration}/${session.maxIterations}\n`;
+
+    // Working directory (where to make changes)
+    if (context.workingDirectory) {
+      content += `**Working Directory**: \`${context.workingDirectory}\`\n`;
+    }
+    content += "\n";
 
     // Score
     if (latestIteration.score !== undefined) {

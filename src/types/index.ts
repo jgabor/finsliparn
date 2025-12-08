@@ -139,6 +139,7 @@ export type DirectiveContext = {
   specHints?: string[]; // Paths to spec/reference files for context
   qualityAnalysis?: QualityAnalysis; // Code quality signals and suggestions
   priorSolutions?: SolutionMemory[]; // Prior solutions for context
+  workingDirectory?: string; // Path where LLM should make changes (worktree path)
 };
 
 export type IterationSummary = {

@@ -96,6 +96,23 @@ async function setupWorktree(
   iteration: number
 ): Promise<{ workingDirectory: string; worktreePath?: string } | ToolResponse> {
   const branchName = `finsliparn/${sessionId}/iteration-${iteration}`;
+  const expectedPath = worktreeManager.getWorktreePath(branchName);
+
+  // Check if worktree already exists (created in finslipaStart for iteration 1)
+  try {
+    const stat = await Bun.file(join(expectedPath, ".git")).exists();
+    if (stat) {
+      log.info("Reusing existing worktree for iteration", {
+        sessionId,
+        iteration,
+        worktreePath: expectedPath,
+      });
+      return { workingDirectory: expectedPath, worktreePath: expectedPath };
+    }
+  } catch {
+    // Worktree doesn't exist, will create below
+  }
+
   try {
     const worktreePath = await worktreeManager.createWorktree(branchName);
     log.info("Worktree created for iteration", {
@@ -370,24 +387,51 @@ export async function finslipaStart(args: {
       mergeThreshold: args.mergeThreshold,
     });
 
+    // Create worktree for iteration 1 upfront so LLM works in isolated environment
+    const worktreeManager = new WorktreeManager();
+    const branchName = `finsliparn/${session.id}/iteration-1`;
+    let worktreePath: string;
+    try {
+      worktreePath = await worktreeManager.createWorktree(branchName);
+      log.info("Worktree created for new session", {
+        sessionId: session.id,
+        worktreePath,
+      });
+    } catch (error) {
+      log.error("Failed to create initial worktree", {
+        sessionId: session.id,
+        error: String(error),
+      });
+      return {
+        success: false,
+        message: `Failed to create worktree: ${error}`,
+        error: {
+          code: "WORKTREE_CREATION_FAILED",
+          details: String(error),
+        },
+      };
+    }
+
     // Detect spec files for context
     const specHints = detectSpecFiles();
 
-    // Initialize directive
+    // Initialize directive with working directory
     const directiveWriter = new DirectiveWriter();
     await directiveWriter.write({
       session,
       latestIteration: {
-        iteration: 0,
+        iteration: 1,
         status: "pending",
         timestamp: new Date(),
         score: 0,
+        worktreePath,
       },
       nextActions: [
         `Implement the task: ${args.taskDescription}`,
         "Then call finslipa_check to validate with tests",
       ],
       specHints: specHints.length > 0 ? specHints : undefined,
+      workingDirectory: worktreePath,
     });
 
     return {
@@ -396,9 +440,10 @@ export async function finslipaStart(args: {
       data: {
         sessionId: session.id,
         taskDescription: session.taskDescription,
+        workingDirectory: worktreePath,
       },
       nextSteps: [
-        `Make your code changes for: ${args.taskDescription}`,
+        `Make your code changes in: ${worktreePath}`,
         "Call finslipa_check to run tests and get feedback",
       ],
     };
