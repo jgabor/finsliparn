@@ -10,7 +10,7 @@
     "finsliparn": "src/mcp/server.ts"
   },
   "scripts": {
-    "mcp": "bun src/mcp/server.ts"
+    "finsliparn": "bun run src/mcp/server.ts --debug --log-path logs"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.24.3",

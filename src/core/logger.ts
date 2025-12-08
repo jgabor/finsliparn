@@ -6,7 +6,8 @@
  * Outputs to stderr (or file) to avoid polluting MCP responses
  */
 
-import { appendFileSync } from "node:fs";
+import { appendFileSync, existsSync, mkdirSync, statSync } from "node:fs";
+import { dirname, join } from "node:path";
 
 export type LogLevel = "DEBUG" | "INFO" | "WARN" | "ERROR";
 
@@ -28,6 +29,20 @@ const globalConfig: LoggerConfig = {
   debug: false,
   logPath: undefined,
 };
+
+const FILE_EXTENSION_REGEX = /\.\w+$/;
+
+function resolveLogFilePath(logPath: string): string {
+  const hasFileExtension = FILE_EXTENSION_REGEX.test(logPath);
+  if (
+    logPath.endsWith("/") ||
+    !hasFileExtension ||
+    (existsSync(logPath) && statSync(logPath).isDirectory())
+  ) {
+    return join(logPath, "finsliparn.log");
+  }
+  return logPath;
+}
 
 export function configureLogger(options: Partial<LoggerConfig>): void {
   if (options.debug !== undefined) {
@@ -75,7 +90,9 @@ class Logger {
   private output(formattedMessage: string): void {
     const logPath = this.getLogPath();
     if (logPath) {
-      appendFileSync(logPath, `${formattedMessage}\n`);
+      const resolvedPath = resolveLogFilePath(logPath);
+      mkdirSync(dirname(resolvedPath), { recursive: true });
+      appendFileSync(resolvedPath, `${formattedMessage}\n`);
     } else {
       console.error(formattedMessage);
     }

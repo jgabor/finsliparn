@@ -20,7 +20,7 @@
     "finsliparn": {
       "type": "stdio",
       "command": "bun",
-      "args": ["run", "mcp"]
+      "args": ["run", "finsliparn"]
     }
   }
 }
