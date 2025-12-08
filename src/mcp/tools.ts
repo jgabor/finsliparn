@@ -988,8 +988,36 @@ export async function finslipaMerge(args: {
   }
 }
 
+async function cleanWorktreesForSession(
+  worktreeManager: WorktreeManager,
+  session: { id: string; iterations: IterationResult[] }
+): Promise<number> {
+  let cleanedCount = 0;
+  for (const iteration of session.iterations) {
+    if (iteration.worktreePath) {
+      const branchName = `finsliparn/${session.id}/iteration-${iteration.iteration}`;
+      try {
+        await worktreeManager.deleteWorktree(branchName);
+        cleanedCount += 1;
+        log.debug("Worktree cleaned", {
+          sessionId: session.id,
+          iteration: iteration.iteration,
+        });
+      } catch (error) {
+        log.warn("Failed to clean worktree", {
+          sessionId: session.id,
+          iteration: iteration.iteration,
+          error: String(error),
+        });
+      }
+    }
+  }
+  return cleanedCount;
+}
+
 async function cleanSpecificSession(
   sessionManager: SessionManager,
+  worktreeManager: WorktreeManager,
   sessionId: string
 ): Promise<ToolResponse> {
   const session = await sessionManager.loadSession(sessionId);
@@ -1016,8 +1044,16 @@ async function cleanSpecificSession(
     };
   }
 
+  const worktreesCleaned = await cleanWorktreesForSession(
+    worktreeManager,
+    session
+  );
   await sessionManager.deleteSession(sessionId);
-  log.info("Session cleaned", { sessionId, status: session.status });
+  log.info("Session cleaned", {
+    sessionId,
+    status: session.status,
+    worktreesCleaned,
+  });
 
   return {
     success: true,
@@ -1025,23 +1061,30 @@ async function cleanSpecificSession(
     data: {
       sessionId,
       cleanedStatus: session.status,
+      worktreesCleaned,
     },
-    nextSteps: ["Session directory deleted"],
+    nextSteps: ["Session directory and worktrees deleted"],
   };
 }
 
 async function cleanSessionsByStatus(
   sessionManager: SessionManager,
+  worktreeManager: WorktreeManager,
   targetStatus: string
 ): Promise<ToolResponse> {
   const sessionDirs = await sessionManager.listSessions();
   let cleanedCount = 0;
+  let worktreesCleaned = 0;
   const errors: string[] = [];
 
   for (const sessionDir of sessionDirs) {
     try {
       const session = await sessionManager.loadSession(sessionDir);
       if (session && session.status === targetStatus) {
+        worktreesCleaned += await cleanWorktreesForSession(
+          worktreeManager,
+          session
+        );
         await sessionManager.deleteSession(sessionDir);
         cleanedCount += 1;
         log.info("Session cleaned by status filter", {
@@ -1060,10 +1103,11 @@ async function cleanSessionsByStatus(
     data: {
       cleanedCount,
       status: targetStatus,
+      worktreesCleaned,
       errors: errors.length > 0 ? errors : undefined,
     },
     nextSteps: [
-      `${cleanedCount} session directory/directories deleted`,
+      `${cleanedCount} session directory/directories and ${worktreesCleaned} worktree(s) deleted`,
       ...(errors.length > 0
         ? [`${errors.length} error(s) during cleanup`]
         : []),
@@ -1071,11 +1115,44 @@ async function cleanSessionsByStatus(
   };
 }
 
+async function cleanOrphanedWorktrees(
+  sessionManager: SessionManager,
+  worktreeManager: WorktreeManager
+): Promise<{ cleanedCount: number; errors: string[] }> {
+  const allWorktreePaths = await worktreeManager.listSessionWorktreePaths();
+  const sessionIds = new Set(await sessionManager.listSessions());
+  let cleanedCount = 0;
+  const errors: string[] = [];
+
+  for (const worktreePath of allWorktreePaths) {
+    const parts = worktreePath.split("/");
+    if (parts.length >= 2) {
+      const sessionId = parts[1];
+      if (!sessionIds.has(sessionId)) {
+        try {
+          await worktreeManager.deleteWorktreeByPath(worktreePath);
+          cleanedCount += 1;
+          log.info("Orphaned worktree cleaned", { worktreePath, sessionId });
+        } catch (error) {
+          errors.push(
+            `Failed to clean orphaned worktree ${worktreePath}: ${error}`
+          );
+        }
+      }
+    }
+  }
+
+  await worktreeManager.cleanEmptyDirectories();
+  return { cleanedCount, errors };
+}
+
 async function cleanAllFinishedSessions(
-  sessionManager: SessionManager
+  sessionManager: SessionManager,
+  worktreeManager: WorktreeManager
 ): Promise<ToolResponse> {
   const sessionDirs = await sessionManager.listSessions();
   let cleanedCount = 0;
+  let worktreesCleaned = 0;
   const errors: string[] = [];
   const cleanableStatuses = ["completed", "cancelled", "failed"];
 
@@ -1083,6 +1160,10 @@ async function cleanAllFinishedSessions(
     try {
       const session = await sessionManager.loadSession(sessionDir);
       if (session && cleanableStatuses.includes(session.status)) {
+        worktreesCleaned += await cleanWorktreesForSession(
+          worktreeManager,
+          session
+        );
         await sessionManager.deleteSession(sessionDir);
         cleanedCount += 1;
         log.info("Session cleaned by default filter", {
@@ -1095,16 +1176,25 @@ async function cleanAllFinishedSessions(
     }
   }
 
+  const orphanedResult = await cleanOrphanedWorktrees(
+    sessionManager,
+    worktreeManager
+  );
+  worktreesCleaned += orphanedResult.cleanedCount;
+  errors.push(...orphanedResult.errors);
+
   return {
     success: true,
     message: `Cleaned ${cleanedCount} completed/cancelled session(s)`,
     data: {
       cleanedCount,
       statuses: cleanableStatuses,
+      worktreesCleaned,
+      orphanedWorktreesCleaned: orphanedResult.cleanedCount,
       errors: errors.length > 0 ? errors : undefined,
     },
     nextSteps: [
-      `${cleanedCount} session directory/directories deleted`,
+      `${cleanedCount} session directory/directories and ${worktreesCleaned} worktree(s) deleted`,
       ...(errors.length > 0
         ? [`${errors.length} error(s) during cleanup`]
         : []),
@@ -1117,17 +1207,26 @@ export async function finslipaClean(args: {
   status?: "completed" | "cancelled";
 }): Promise<ToolResponse> {
   const sessionManager = new SessionManager();
+  const worktreeManager = new WorktreeManager();
 
   try {
     if (args.sessionId) {
-      return await cleanSpecificSession(sessionManager, args.sessionId);
+      return await cleanSpecificSession(
+        sessionManager,
+        worktreeManager,
+        args.sessionId
+      );
     }
 
     if (args.status) {
-      return await cleanSessionsByStatus(sessionManager, args.status);
+      return await cleanSessionsByStatus(
+        sessionManager,
+        worktreeManager,
+        args.status
+      );
     }
 
-    return await cleanAllFinishedSessions(sessionManager);
+    return await cleanAllFinishedSessions(sessionManager, worktreeManager);
   } catch (error) {
     log.error("Clean failed", {
       sessionId: args.sessionId,

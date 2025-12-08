@@ -5,7 +5,7 @@ argument-hint: [session-id|--completed|--cancelled]
 
 # Finslipa clean
 
-Delete session directories that have been completed, cancelled, or failed.
+Delete session directories and associated git worktrees for completed, cancelled, or failed sessions.
 
 ## Your task
 
@@ -17,5 +17,5 @@ Delete session directories that have been completed, cancelled, or failed.
 
 2. Report the cleanup results including:
    - Number of sessions cleaned
+   - Number of worktrees deleted
    - Any errors encountered
-   - Confirmation of directories deleted
