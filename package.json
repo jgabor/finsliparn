@@ -15,15 +15,15 @@
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.24.3",
     "@types/node": "^24.10.1",
-    "simple-git": "^3.21.0"
+    "simple-git": "^3.30.0"
   },
   "devDependencies": {
     "@biomejs/biome": "2.3.8",
     "@types/bun": "latest",
-    "lefthook": "^2.0.8",
+    "lefthook": "^2.0.9",
     "ultracite": "6.3.9"
   },
   "peerDependencies": {
-    "typescript": "^5"
+    "typescript": "^5.9.3"
   }
 }
