@@ -26,9 +26,21 @@ export class WorktreeManager {
     const worktreePath = join(this.worktreesDir, branchName);
 
     try {
-      // Create worktree from base branch
-      await git.raw(["worktree", "add", worktreePath, baseBranch]);
-      log.info("Worktree created", { branchName, worktreePath, baseBranch });
+      // Create worktree with a new branch to avoid checkout conflicts
+      // Git doesn't allow the same branch to be checked out in multiple worktrees
+      await git.raw([
+        "worktree",
+        "add",
+        "-B",
+        branchName,
+        worktreePath,
+        baseBranch,
+      ]);
+      log.info("Worktree created with new branch", {
+        branchName,
+        worktreePath,
+        baseBranch,
+      });
       return worktreePath;
     } catch (error) {
       log.error("Worktree creation failed", {
