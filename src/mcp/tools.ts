@@ -12,6 +12,7 @@ import { detectTestRunner } from "../core/test-runner";
 import { WorktreeManager } from "../core/worktree-manager";
 import type {
   DiffAnalysis,
+  IterationResult,
   IterationSummary,
   QualityAnalysis,
   SolutionMemory,
@@ -69,6 +70,36 @@ function buildNextSteps(testResults: TestResults): string[] {
     return ["All tests passing! Call finslipa_merge to complete"];
   }
   return ["Fix failing tests and run finslipa_check again"];
+}
+
+function selectMinimalDiffWinner(
+  completedIterations: IterationResult[],
+  passingIterations: IterationResult[]
+): IterationResult {
+  const candidates =
+    passingIterations.length > 0 ? passingIterations : completedIterations;
+  return candidates.reduce((best, current) => {
+    const bestDiffSize =
+      (best.diff?.insertions ?? 0) + (best.diff?.deletions ?? 0);
+    const currentDiffSize =
+      (current.diff?.insertions ?? 0) + (current.diff?.deletions ?? 0);
+    return currentDiffSize < bestDiffSize ? current : best;
+  });
+}
+
+function selectBalancedWinner(
+  completedIterations: IterationResult[]
+): IterationResult {
+  const getDiffPenalty = (iter: IterationResult) => {
+    const diffSize = (iter.diff?.insertions ?? 0) + (iter.diff?.deletions ?? 0);
+    return Math.min(diffSize / 500, 1) * 30;
+  };
+  return completedIterations.reduce((best, current) => {
+    const bestBalanced = (best.score ?? 0) * 0.7 - getDiffPenalty(best);
+    const currentBalanced =
+      (current.score ?? 0) * 0.7 - getDiffPenalty(current);
+    return currentBalanced > bestBalanced ? current : best;
+  });
 }
 
 function isSpecFile(filename: string): boolean {
@@ -550,30 +581,17 @@ export async function finslipaVote(args: {
     }
 
     // Select winner based on strategy
-    let winner = completedIterations[0];
-
-    // For minimal_diff, only consider passing iterations (score === 100)
-    // This prevents selecting a failing solution just because it has fewer changes
     const passingIterations = completedIterations.filter(
       (iter) => iter.score === 100
     );
 
+    let winner: IterationResult;
     if (strategy === "highest_score") {
       winner = completedIterations.reduce((best, current) =>
         (current.score ?? 0) > (best.score ?? 0) ? current : best
       );
     } else if (strategy === "minimal_diff") {
-      // Prefer iterations with smallest diff, but ONLY among passing iterations
-      // Fall back to highest_score if no passing iterations exist
-      const candidates =
-        passingIterations.length > 0 ? passingIterations : completedIterations;
-      winner = candidates.reduce((best, current) => {
-        const bestDiffSize =
-          (best.diff?.insertions ?? 0) + (best.diff?.deletions ?? 0);
-        const currentDiffSize =
-          (current.diff?.insertions ?? 0) + (current.diff?.deletions ?? 0);
-        return currentDiffSize < bestDiffSize ? current : best;
-      });
+      winner = selectMinimalDiffWinner(completedIterations, passingIterations);
       if (passingIterations.length === 0) {
         log.warn(
           "minimal_diff: No passing iterations, falling back to smallest diff among all",
@@ -582,20 +600,8 @@ export async function finslipaVote(args: {
           }
         );
       }
-    } else if (strategy === "balanced") {
-      // Balance score (70%) with diff size penalty (30%)
-      // Normalize diff size: smaller is better, cap at 500 lines
-      const getDiffPenalty = (iter: (typeof completedIterations)[0]) => {
-        const diffSize =
-          (iter.diff?.insertions ?? 0) + (iter.diff?.deletions ?? 0);
-        return Math.min(diffSize / 500, 1) * 30;
-      };
-      winner = completedIterations.reduce((best, current) => {
-        const bestBalanced = (best.score ?? 0) * 0.7 - getDiffPenalty(best);
-        const currentBalanced =
-          (current.score ?? 0) * 0.7 - getDiffPenalty(current);
-        return currentBalanced > bestBalanced ? current : best;
-      });
+    } else {
+      winner = selectBalancedWinner(completedIterations);
     }
 
     await sessionManager.updateSessionStatus(args.sessionId, "evaluating");

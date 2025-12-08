@@ -95,11 +95,12 @@ export class DiffAnalyzer {
   private parseNumstat(output: string): DiffHunk[] {
     const lines = output.trim().split("\n").filter(Boolean);
     return lines.map((line) => {
-      const [insertions, deletions, file] = line.split("\t");
+      const parts = line.split("\t");
+      const file = parts[2] ?? "";
       return {
         file,
-        insertions: insertions === "-" ? 0 : Number.parseInt(insertions, 10),
-        deletions: deletions === "-" ? 0 : Number.parseInt(deletions, 10),
+        insertions: parts[0] === "-" ? 0 : Number.parseInt(parts[0] ?? "0", 10),
+        deletions: parts[1] === "-" ? 0 : Number.parseInt(parts[1] ?? "0", 10),
       };
     });
   }

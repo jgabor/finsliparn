@@ -47,7 +47,12 @@ function shuffleArray<T>(array: T[], random: () => number): T[] {
   const result = [...array];
   for (let i = result.length - 1; i > 0; i--) {
     const j = Math.floor(random() * (i + 1));
-    [result[i], result[j]] = [result[j], result[i]];
+    const iValue = result[i];
+    const jValue = result[j];
+    if (iValue !== undefined && jValue !== undefined) {
+      result[i] = jValue;
+      result[j] = iValue;
+    }
   }
   return result;
 }
@@ -310,17 +315,20 @@ export class FeedbackGenerator {
     let section = "## Prior Solutions\n\n";
 
     if (this.options.useXmlFormat) {
-      for (let i = 0; i < selected.length; i++) {
-        const solution = selected[i];
-        section += `<solution_${i + 1}>\n`;
+      for (const solution of selected) {
+        const index = selected.indexOf(solution);
+        section += `<solution_${index + 1}>\n`;
         section += `<solution_code>\n\`\`\`\n${solution.code}\n\`\`\`\n</solution_code>\n`;
         section += `<solution_evaluation>${solution.feedback}</solution_evaluation>\n`;
         section += `<solution_score>${solution.score}</solution_score>\n`;
-        section += `</solution_${i + 1}>\n\n`;
+        section += `</solution_${index + 1}>\n\n`;
       }
     } else {
       for (let i = 0; i < selected.length; i++) {
         const solution = selected[i];
+        if (!solution) {
+          continue;
+        }
         section += `### Solution ${i + 1} (Score: ${solution.score}%)\n\n`;
         section += `**Code:**\n\`\`\`\n${solution.code}\n\`\`\`\n\n`;
         section += `**Evaluation:** ${solution.feedback}\n\n`;

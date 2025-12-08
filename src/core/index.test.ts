@@ -381,6 +381,9 @@ describe("SoftScorer", () => {
     const softScore = scorer.calculateTestResultsSoftScore(results);
     expect(softScore).toBeGreaterThan(0.6);
     expect(softScore).toBeLessThan(1.0);
-    expect(results.failures[0].softScore).toBeDefined();
+    expect(results.failures[0]).toBeDefined();
+    if (results.failures[0]) {
+      expect(results.failures[0].softScore).toBeDefined();
+    }
   });
 });
