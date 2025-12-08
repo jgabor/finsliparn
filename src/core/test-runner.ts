@@ -7,6 +7,9 @@ import type {
   TestRunner,
   TestRunOptions,
 } from "../types";
+import { createLogger } from "./logger";
+
+const log = createLogger("TestRunner");
 
 const NOT_OK_PATTERN = /not ok \d+ - (.+)/;
 const PASS_COUNT_PATTERN = /^\s*(\d+)\s+pass(?:ed)?(?:\s|$)/m;
@@ -33,6 +36,7 @@ export class BunTestRunner implements TestRunner {
   }
 
   run(options: TestRunOptions): Promise<TestResults> {
+    log.debug("Running tests", { cwd: options.cwd, timeout: options.timeout });
     return new Promise((resolve, reject) => {
       let stdout = "";
       let stderr = "";
@@ -51,14 +55,22 @@ export class BunTestRunner implements TestRunner {
         stderr += data.toString();
       });
 
-      proc.on("close", () => {
+      proc.on("close", (code) => {
         const results = this.parseOutput(stdout, stderr);
         results.stdout = stdout;
         results.stderr = stderr;
+        log.info("Tests completed", {
+          exitCode: code,
+          passed: results.passed,
+          failed: results.failed,
+          total: results.total,
+          duration: results.duration,
+        });
         resolve(results);
       });
 
       proc.on("error", (error: Error) => {
+        log.error("Test runner error", { error: error.message });
         reject(error);
       });
     });
@@ -222,9 +234,11 @@ export async function detectTestRunner(cwd: string): Promise<TestRunner> {
   for (const runner of runners) {
     // eslint-disable-next-line no-await-in-loop
     if (await runner.detect(cwd)) {
+      log.debug("Test runner detected", { runner: runner.name, cwd });
       return runner;
     }
   }
 
+  log.warn("No test runner detected", { cwd });
   throw new Error("No supported test runner detected");
 }

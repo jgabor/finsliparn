@@ -92,7 +92,7 @@ See [docs/spec-cc.md](docs/spec-cc.md) for detailed technical specifications.
   - [x] Add quality signals section
   - [x] Show iteration comparison
 
-## Phase 5.5: Poetiq Parity (Quality Improvements)
+## Phase 5.5: Poetiq Parity & Quality Improvements
 
 **Goal**: Implement proven patterns from Poetiq's ARC-AGI solver to improve LLM refinement quality.
 
@@ -114,6 +114,26 @@ See [docs/spec-cc.md](docs/spec-cc.md) for detailed technical specifications.
   - [x] `selection_probability` for prior solution sampling
   - [x] `shuffle_examples` for feedback randomization
   - [x] `seed` for deterministic randomness
+- [x] **Structured Debug Logging**
+  - [x] Create `Logger` utility with levels (DEBUG, INFO, WARN, ERROR)
+  - [x] Add log points: session transitions, test runs, git operations
+  - [x] `FINSLIPARN_DEBUG=1` environment variable to enable
+- [x] **Error Handling Hardening**
+  - [x] Fix silent worktree fallback (throw instead of warn)
+  - [x] Add session file locking to prevent race conditions
+  - [x] Preserve error context in catch blocks
+  - [x] Validate `testResults.total > 0` before scoring
+- [x] **Voting Strategy Fix**
+  - [x] Filter to passing iterations before `minimal_diff` selection
+  - [x] Add test coverage for edge case
+- [ ] **Solution Memory Integration**
+  - [ ] Accumulate `SolutionMemory[]` during iteration loop
+  - [ ] Pass to FeedbackGenerator as `priorSolutions`
+- [ ] **Code Quality**
+  - [ ] Decompose `finslipaCheck()` into phases
+  - [ ] Remove `buildNextActions`/`buildNextSteps` duplication
+- [ ] **Missing Tools**
+  - [ ] Implement `finslipa_cancel` tool
 
 ## Phase 6: Advanced Features (MVP)
 

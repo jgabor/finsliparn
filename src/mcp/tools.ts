@@ -3,6 +3,7 @@ import { join } from "node:path";
 import { simpleGit } from "simple-git";
 import { DiffAnalyzer } from "../core/diff-analyzer";
 import { DirectiveWriter } from "../core/directive-writer";
+import { createLogger } from "../core/logger";
 import { QualityAnalyzer } from "../core/quality-analyzer";
 import { ScoringEngine } from "../core/scoring-engine";
 import { SessionManager } from "../core/session-manager";
@@ -17,6 +18,8 @@ import type {
   TestResults,
   ToolResponse,
 } from "../types";
+
+const log = createLogger("MCP");
 
 const SPEC_FILENAMES = [
   "spec",
@@ -180,7 +183,6 @@ export async function finslipaStart(args: {
   }
 }
 
-// biome-ignore lint/complexity/noExcessiveCognitiveComplexity: Full iteration workflow with test running, analysis, and directive updates
 export async function finslipaCheck(args: {
   sessionId: string;
   useWorktree?: boolean;
@@ -189,193 +191,246 @@ export async function finslipaCheck(args: {
   const worktreeManager = new WorktreeManager();
 
   try {
-    const session = await sessionManager.loadSession(args.sessionId);
-    if (!session) {
-      return {
-        success: false,
-        message: `Session ${args.sessionId} not found`,
-        error: {
-          code: "SESSION_NOT_FOUND",
-          details: `No session with ID ${args.sessionId}`,
-        },
-      };
-    }
-
-    // Safety check: prevent infinite loops
-    if (session.currentIteration >= session.maxIterations) {
-      await sessionManager.updateSessionStatus(args.sessionId, "failed");
-      return {
-        success: false,
-        message: `Max iterations (${session.maxIterations}) reached`,
-        error: {
-          code: "MAX_ITERATIONS_REACHED",
-          details: `Session has reached the maximum of ${session.maxIterations} iterations. Consider starting a new session or increasing maxIterations.`,
-        },
-      };
-    }
-
-    // Update status to iterating
-    await sessionManager.updateSessionStatus(args.sessionId, "iterating");
-
-    // Determine working directory (worktree or cwd)
-    const iteration = session.currentIteration + 1;
-    let workingDirectory = process.cwd();
-    let worktreePath: string | undefined;
-
-    if (args.useWorktree) {
-      const branchName = `finsliparn/${session.id}/iteration-${iteration}`;
-      try {
-        worktreePath = await worktreeManager.createWorktree(branchName);
-        workingDirectory = worktreePath;
-      } catch (error) {
-        // Fall back to cwd if worktree creation fails
-        console.warn(`Failed to create worktree, using cwd: ${error}`);
+    // Use locking to prevent concurrent modifications
+    // biome-ignore lint/complexity/noExcessiveCognitiveComplexity: Full iteration workflow with test running, analysis, and directive updates
+    return await sessionManager.withLock(args.sessionId, async () => {
+      const session = await sessionManager.loadSession(args.sessionId);
+      if (!session) {
+        return {
+          success: false,
+          message: `Session ${args.sessionId} not found`,
+          error: {
+            code: "SESSION_NOT_FOUND",
+            details: `No session with ID ${args.sessionId}`,
+          },
+        };
       }
-    }
 
-    // Detect and run tests
-    try {
-      const testRunner = await detectTestRunner(workingDirectory);
-      const testResults = await testRunner.run({
-        timeout: 30_000,
-        cwd: workingDirectory,
+      log.debug("Starting check", {
+        sessionId: args.sessionId,
+        currentIteration: session.currentIteration,
+        maxIterations: session.maxIterations,
       });
 
-      // Calculate soft scores for partial credit
-      const softScorer = new SoftScorer();
-      testResults.softScore =
-        softScorer.calculateTestResultsSoftScore(testResults);
+      // Safety check: prevent infinite loops
+      if (session.currentIteration >= session.maxIterations) {
+        await sessionManager.updateSessionStatus(args.sessionId, "failed");
+        return {
+          success: false,
+          message: `Max iterations (${session.maxIterations}) reached`,
+          error: {
+            code: "MAX_ITERATIONS_REACHED",
+            details: `Session has reached the maximum of ${session.maxIterations} iterations. Consider starting a new session or increasing maxIterations.`,
+          },
+        };
+      }
 
-      // Analyze diff for complexity scoring
-      const diffAnalyzer = new DiffAnalyzer();
-      const diffAnalysis = await diffAnalyzer.analyze(workingDirectory);
+      // Update status to iterating
+      await sessionManager.updateSessionStatus(args.sessionId, "iterating");
 
-      // Analyze code quality when tests pass
-      let qualityAnalysis: QualityAnalysis | undefined;
-      if (testResults.failed === 0 && testResults.total > 0) {
-        const rawDiff = await diffAnalyzer.getRawDiff(workingDirectory);
-        if (rawDiff) {
-          const qualityAnalyzer = new QualityAnalyzer();
-          qualityAnalysis = qualityAnalyzer.analyze(rawDiff);
+      // Determine working directory (worktree or cwd)
+      const iteration = session.currentIteration + 1;
+      let workingDirectory = process.cwd();
+      let worktreePath: string | undefined;
+
+      if (args.useWorktree) {
+        const branchName = `finsliparn/${session.id}/iteration-${iteration}`;
+        try {
+          worktreePath = await worktreeManager.createWorktree(branchName);
+          workingDirectory = worktreePath;
+          log.info("Worktree created for iteration", {
+            sessionId: args.sessionId,
+            iteration,
+            worktreePath,
+          });
+        } catch (error) {
+          log.error("Worktree creation failed", {
+            sessionId: args.sessionId,
+            iteration,
+            branchName,
+            error: String(error),
+          });
+          return {
+            success: false,
+            message: `Failed to create worktree: ${error}`,
+            error: {
+              code: "WORKTREE_CREATION_FAILED",
+              details: `Cannot create isolated worktree for iteration. Ensure git working directory is clean. Error: ${error}`,
+            },
+          };
         }
       }
 
-      // Calculate score using ScoringEngine with diff analysis
-      const scoringEngine = new ScoringEngine();
-      const scoreResult = scoringEngine.calculateScore(
-        testResults,
-        diffAnalysis
-      );
-
-      // Capture solution memory (Poetiq-style)
-      const rawDiff = await diffAnalyzer.getRawDiff(workingDirectory);
-      const softScoreInfo =
-        testResults.softScore !== undefined
-          ? ` (soft score: ${(testResults.softScore * 100).toFixed(1)}%)`
-          : "";
-      const solutionFeedback =
-        testResults.failed > 0
-          ? `${testResults.failed}/${testResults.total} tests failing${softScoreInfo}`
-          : `All ${testResults.total} tests passing`;
-      const solution: SolutionMemory = {
-        code: rawDiff || "(no changes)",
-        feedback: solutionFeedback,
-        score: scoreResult.score,
-      };
-
-      // Create iteration result
-      await sessionManager.addIteration(args.sessionId, {
-        iteration,
-        status: "completed",
-        timestamp: new Date(),
-        testResults,
-        score: scoreResult.score,
-        diff: diffAnalysis,
-        worktreePath,
-        solution,
-      });
-
-      // Track best result
-      await sessionManager.updateBestResult(
-        args.sessionId,
-        iteration,
-        scoreResult.score
-      );
-
-      // Transition to completed if all tests pass
-      const allTestsPassing = testResults.failed === 0 && testResults.total > 0;
-      if (allTestsPassing) {
-        await sessionManager.updateSessionStatus(args.sessionId, "completed");
-      }
-
-      // Update directive with feedback - reload session to get updated status
-      const directiveWriter = new DirectiveWriter();
-      const updatedSession = await sessionManager.loadSession(args.sessionId);
-      const latestIteration = await sessionManager.getLatestIteration(
-        args.sessionId
-      );
-
-      if (latestIteration && updatedSession) {
-        // Build history from previous iterations using UPDATED session to prevent repeating mistakes
-        const history: IterationSummary[] = updatedSession.iterations
-          .filter((iter) => iter.testResults && iter.score !== undefined)
-          .map((iter) => ({
-            iteration: iter.iteration,
-            score: iter.score ?? 0,
-            summary: iter.testResults
-              ? `${iter.testResults.passed}/${iter.testResults.total} tests passing`
-              : "No test results",
-          }));
-
-        // Collect prior solutions (Poetiq-style)
-        const priorSolutions: SolutionMemory[] = updatedSession.iterations
-          .filter((iter) => iter.solution !== undefined)
-          .map((iter) => iter.solution as SolutionMemory);
-
-        const remainingIterations = updatedSession.maxIterations - iteration;
-        const nextActions = buildNextActions(
-          testResults,
-          diffAnalysis,
-          remainingIterations
-        );
-        const specHints = detectSpecFiles();
-
-        await directiveWriter.write({
-          session: updatedSession,
-          latestIteration,
-          nextActions,
-          history: history.length > 0 ? history : undefined,
-          specHints: specHints.length > 0 ? specHints : undefined,
-          qualityAnalysis,
-          priorSolutions:
-            priorSolutions.length > 0 ? priorSolutions : undefined,
+      // Detect and run tests
+      try {
+        const testRunner = await detectTestRunner(workingDirectory);
+        const testResults = await testRunner.run({
+          timeout: 30_000,
+          cwd: workingDirectory,
         });
-      }
 
-      return {
-        success: true,
-        message: `Iteration ${iteration} completed`,
-        data: {
-          passed: testResults.passed,
-          failed: testResults.failed,
-          total: testResults.total,
+        // Calculate soft scores for partial credit
+        const softScorer = new SoftScorer();
+        testResults.softScore =
+          softScorer.calculateTestResultsSoftScore(testResults);
+
+        // Analyze diff for complexity scoring
+        const diffAnalyzer = new DiffAnalyzer();
+        const diffAnalysis = await diffAnalyzer.analyze(workingDirectory);
+
+        // Validate test results before scoring
+        if (testResults.total === 0) {
+          log.warn("No tests detected", {
+            sessionId: args.sessionId,
+            iteration,
+          });
+          return {
+            success: false,
+            message: "No tests detected",
+            error: {
+              code: "NO_TESTS_DETECTED",
+              details:
+                "Test runner completed but found 0 tests. Ensure test files exist and follow naming conventions (*.test.ts, *.spec.ts).",
+            },
+          };
+        }
+
+        // Analyze code quality when tests pass
+        let qualityAnalysis: QualityAnalysis | undefined;
+        if (testResults.failed === 0 && testResults.total > 0) {
+          const rawDiff = await diffAnalyzer.getRawDiff(workingDirectory);
+          if (rawDiff) {
+            const qualityAnalyzer = new QualityAnalyzer();
+            qualityAnalysis = qualityAnalyzer.analyze(rawDiff);
+          }
+        }
+
+        // Calculate score using ScoringEngine with diff analysis
+        const scoringEngine = new ScoringEngine();
+        const scoreResult = scoringEngine.calculateScore(
+          testResults,
+          diffAnalysis
+        );
+
+        // Capture solution memory (Poetiq-style)
+        const rawDiff = await diffAnalyzer.getRawDiff(workingDirectory);
+        const softScoreInfo =
+          testResults.softScore !== undefined
+            ? ` (soft score: ${(testResults.softScore * 100).toFixed(1)}%)`
+            : "";
+        const solutionFeedback =
+          testResults.failed > 0
+            ? `${testResults.failed}/${testResults.total} tests failing${softScoreInfo}`
+            : `All ${testResults.total} tests passing`;
+        const solution: SolutionMemory = {
+          code: rawDiff || "(no changes)",
+          feedback: solutionFeedback,
           score: scoreResult.score,
-          complexity: diffAnalysis.complexity,
-          remainingIterations: session.maxIterations - iteration,
-        },
-        nextSteps: buildNextSteps(testResults),
-      };
-    } catch {
-      return {
-        success: false,
-        message: "No test runner detected or tests failed to run",
-        error: {
-          code: "TEST_RUN_FAILED",
-          details: "Could not detect or execute tests",
-        },
-      };
-    }
+        };
+
+        // Create iteration result
+        await sessionManager.addIteration(args.sessionId, {
+          iteration,
+          status: "completed",
+          timestamp: new Date(),
+          testResults,
+          score: scoreResult.score,
+          diff: diffAnalysis,
+          worktreePath,
+          solution,
+        });
+
+        // Track best result
+        await sessionManager.updateBestResult(
+          args.sessionId,
+          iteration,
+          scoreResult.score
+        );
+
+        // Transition to completed if all tests pass
+        const allTestsPassing =
+          testResults.failed === 0 && testResults.total > 0;
+        if (allTestsPassing) {
+          await sessionManager.updateSessionStatus(args.sessionId, "completed");
+        }
+
+        // Update directive with feedback - reload session to get updated status
+        const directiveWriter = new DirectiveWriter();
+        const updatedSession = await sessionManager.loadSession(args.sessionId);
+        const latestIteration = await sessionManager.getLatestIteration(
+          args.sessionId
+        );
+
+        if (latestIteration && updatedSession) {
+          // Build history from previous iterations using UPDATED session to prevent repeating mistakes
+          const history: IterationSummary[] = updatedSession.iterations
+            .filter((iter) => iter.testResults && iter.score !== undefined)
+            .map((iter) => ({
+              iteration: iter.iteration,
+              score: iter.score ?? 0,
+              summary: iter.testResults
+                ? `${iter.testResults.passed}/${iter.testResults.total} tests passing`
+                : "No test results",
+            }));
+
+          // Collect prior solutions (Poetiq-style)
+          const priorSolutions: SolutionMemory[] = updatedSession.iterations
+            .filter((iter) => iter.solution !== undefined)
+            .map((iter) => iter.solution as SolutionMemory);
+
+          const remainingIterations = updatedSession.maxIterations - iteration;
+          const nextActions = buildNextActions(
+            testResults,
+            diffAnalysis,
+            remainingIterations
+          );
+          const specHints = detectSpecFiles();
+
+          await directiveWriter.write({
+            session: updatedSession,
+            latestIteration,
+            nextActions,
+            history: history.length > 0 ? history : undefined,
+            specHints: specHints.length > 0 ? specHints : undefined,
+            qualityAnalysis,
+            priorSolutions:
+              priorSolutions.length > 0 ? priorSolutions : undefined,
+          });
+        }
+
+        return {
+          success: true,
+          message: `Iteration ${iteration} completed`,
+          data: {
+            passed: testResults.passed,
+            failed: testResults.failed,
+            total: testResults.total,
+            score: scoreResult.score,
+            complexity: diffAnalysis.complexity,
+            remainingIterations: session.maxIterations - iteration,
+          },
+          nextSteps: buildNextSteps(testResults),
+        };
+      } catch (testError) {
+        log.error("Test run failed", {
+          sessionId: args.sessionId,
+          error: String(testError),
+        });
+        return {
+          success: false,
+          message: "No test runner detected or tests failed to run",
+          error: {
+            code: "TEST_RUN_FAILED",
+            details: `Could not detect or execute tests: ${testError}`,
+          },
+        };
+      }
+    }); // End of withLock callback
   } catch (error) {
+    log.error("Check failed", {
+      sessionId: args.sessionId,
+      error: String(error),
+    });
     return {
       success: false,
       message: `Failed to check session: ${error}`,
@@ -497,19 +552,36 @@ export async function finslipaVote(args: {
     // Select winner based on strategy
     let winner = completedIterations[0];
 
+    // For minimal_diff, only consider passing iterations (score === 100)
+    // This prevents selecting a failing solution just because it has fewer changes
+    const passingIterations = completedIterations.filter(
+      (iter) => iter.score === 100
+    );
+
     if (strategy === "highest_score") {
       winner = completedIterations.reduce((best, current) =>
         (current.score ?? 0) > (best.score ?? 0) ? current : best
       );
     } else if (strategy === "minimal_diff") {
-      // Prefer iterations with smallest diff (insertions + deletions)
-      winner = completedIterations.reduce((best, current) => {
+      // Prefer iterations with smallest diff, but ONLY among passing iterations
+      // Fall back to highest_score if no passing iterations exist
+      const candidates =
+        passingIterations.length > 0 ? passingIterations : completedIterations;
+      winner = candidates.reduce((best, current) => {
         const bestDiffSize =
           (best.diff?.insertions ?? 0) + (best.diff?.deletions ?? 0);
         const currentDiffSize =
           (current.diff?.insertions ?? 0) + (current.diff?.deletions ?? 0);
         return currentDiffSize < bestDiffSize ? current : best;
       });
+      if (passingIterations.length === 0) {
+        log.warn(
+          "minimal_diff: No passing iterations, falling back to smallest diff among all",
+          {
+            totalIterations: completedIterations.length,
+          }
+        );
+      }
     } else if (strategy === "balanced") {
       // Balance score (70%) with diff size penalty (30%)
       // Normalize diff size: smaller is better, cap at 500 lines

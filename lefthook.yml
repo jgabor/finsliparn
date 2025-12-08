@@ -10,7 +10,7 @@ pre-commit:
         - "*.json"
         - "*.jsonc"
         - "*.css"
-    - run: bun x markdownlint --fix --disable MD013 MD029 MD033 MD036 MD040 --
+    - run: bun x markdownlint --dot --fix --disable MD013 MD029 MD033 MD036 MD040 --
       stage_fixed: true
       glob:
         - "*.md"
