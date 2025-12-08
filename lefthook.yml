@@ -1,8 +1,24 @@
+output:
+  [
+    "summary",
+    "success",
+    "failure",
+    "execution",
+    "execution_out",
+    "execution_info",
+    "skips",
+  ]
+
+post-checkout:
+  commands:
+    bun:
+      run: bun install
+
 pre-commit:
   parallel: true
   commands:
     typescript:
-      run: bunx ultracite fix {staged_files}
+      run: bunx ultracite fix
       stage_fixed: true
       glob: "*.{js,jsx,ts,tsx,json,jsonc}"
     markdown:
