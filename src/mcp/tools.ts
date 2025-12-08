@@ -753,6 +753,22 @@ export async function finslipaMerge(args: {
       };
     }
 
+    const completedIterations = session.iterations.filter(
+      (iter) => iter.status === "completed" && iter.score !== undefined
+    );
+
+    if (completedIterations.length < 2) {
+      return {
+        success: false,
+        message: `Cannot merge with only ${completedIterations.length} completed iteration(s). At least 2 are required for comparison.`,
+        error: {
+          code: "INSUFFICIENT_ITERATIONS",
+          details:
+            "Complete at least 2 iterations before merging to ensure meaningful comparison",
+        },
+      };
+    }
+
     // Check merge threshold if configured (undefined means disabled)
     const threshold = session.mergeThreshold;
     if (threshold !== undefined && (iteration.score ?? 0) < threshold) {
