@@ -267,6 +267,21 @@ export class SessionManager {
     return null;
   }
 
+  async listSessions(): Promise<string[]> {
+    try {
+      return await readdir(this.sessionsDir);
+    } catch {
+      // Sessions directory doesn't exist yet
+      return [];
+    }
+  }
+
+  async deleteSession(sessionId: string): Promise<void> {
+    const sessionDir = this.getSessionDir(sessionId);
+    await rm(sessionDir, { recursive: true, force: true });
+    log.info("Session deleted", { sessionId });
+  }
+
   private getSessionDir(sessionId: string): string {
     return join(this.sessionsDir, sessionId);
   }

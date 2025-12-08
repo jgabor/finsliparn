@@ -936,3 +936,159 @@ export async function finslipaMerge(args: {
     };
   }
 }
+
+async function cleanSpecificSession(
+  sessionManager: SessionManager,
+  sessionId: string
+): Promise<ToolResponse> {
+  const session = await sessionManager.loadSession(sessionId);
+  if (!session) {
+    return {
+      success: false,
+      message: `Session ${sessionId} not found`,
+      error: {
+        code: "SESSION_NOT_FOUND",
+        details: `No session with ID ${sessionId}`,
+      },
+    };
+  }
+
+  const cleanableStatuses = ["completed", "cancelled", "failed"];
+  if (!cleanableStatuses.includes(session.status)) {
+    return {
+      success: false,
+      message: `Cannot clean session ${sessionId} with status "${session.status}"`,
+      error: {
+        code: "SESSION_IN_PROGRESS",
+        details: "Only completed, cancelled, or failed sessions can be cleaned",
+      },
+    };
+  }
+
+  await sessionManager.deleteSession(sessionId);
+  log.info("Session cleaned", { sessionId, status: session.status });
+
+  return {
+    success: true,
+    message: `Session ${sessionId} cleaned successfully`,
+    data: {
+      sessionId,
+      cleanedStatus: session.status,
+    },
+    nextSteps: ["Session directory deleted"],
+  };
+}
+
+async function cleanSessionsByStatus(
+  sessionManager: SessionManager,
+  targetStatus: string
+): Promise<ToolResponse> {
+  const sessionDirs = await sessionManager.listSessions();
+  let cleanedCount = 0;
+  const errors: string[] = [];
+
+  for (const sessionDir of sessionDirs) {
+    try {
+      const session = await sessionManager.loadSession(sessionDir);
+      if (session && session.status === targetStatus) {
+        await sessionManager.deleteSession(sessionDir);
+        cleanedCount += 1;
+        log.info("Session cleaned by status filter", {
+          sessionId: sessionDir,
+          status: targetStatus,
+        });
+      }
+    } catch (error) {
+      errors.push(`Failed to clean session ${sessionDir}: ${error}`);
+    }
+  }
+
+  return {
+    success: true,
+    message: `Cleaned ${cleanedCount} session(s) with status "${targetStatus}"`,
+    data: {
+      cleanedCount,
+      status: targetStatus,
+      errors: errors.length > 0 ? errors : undefined,
+    },
+    nextSteps: [
+      `${cleanedCount} session directory/directories deleted`,
+      ...(errors.length > 0
+        ? [`${errors.length} error(s) during cleanup`]
+        : []),
+    ],
+  };
+}
+
+async function cleanAllFinishedSessions(
+  sessionManager: SessionManager
+): Promise<ToolResponse> {
+  const sessionDirs = await sessionManager.listSessions();
+  let cleanedCount = 0;
+  const errors: string[] = [];
+  const cleanableStatuses = ["completed", "cancelled", "failed"];
+
+  for (const sessionDir of sessionDirs) {
+    try {
+      const session = await sessionManager.loadSession(sessionDir);
+      if (session && cleanableStatuses.includes(session.status)) {
+        await sessionManager.deleteSession(sessionDir);
+        cleanedCount += 1;
+        log.info("Session cleaned by default filter", {
+          sessionId: sessionDir,
+          status: session.status,
+        });
+      }
+    } catch (error) {
+      errors.push(`Failed to clean session ${sessionDir}: ${error}`);
+    }
+  }
+
+  return {
+    success: true,
+    message: `Cleaned ${cleanedCount} completed/cancelled session(s)`,
+    data: {
+      cleanedCount,
+      statuses: cleanableStatuses,
+      errors: errors.length > 0 ? errors : undefined,
+    },
+    nextSteps: [
+      `${cleanedCount} session directory/directories deleted`,
+      ...(errors.length > 0
+        ? [`${errors.length} error(s) during cleanup`]
+        : []),
+    ],
+  };
+}
+
+export async function finslipaClean(args: {
+  sessionId?: string;
+  status?: "completed" | "cancelled";
+}): Promise<ToolResponse> {
+  const sessionManager = new SessionManager();
+
+  try {
+    if (args.sessionId) {
+      return await cleanSpecificSession(sessionManager, args.sessionId);
+    }
+
+    if (args.status) {
+      return await cleanSessionsByStatus(sessionManager, args.status);
+    }
+
+    return await cleanAllFinishedSessions(sessionManager);
+  } catch (error) {
+    log.error("Clean failed", {
+      sessionId: args.sessionId,
+      error: String(error),
+    });
+    return {
+      success: false,
+      message: `Failed to clean sessions: ${error}`,
+      error: {
+        code: "CLEAN_FAILED",
+        details: String(error),
+      },
+    };
+  }
+}

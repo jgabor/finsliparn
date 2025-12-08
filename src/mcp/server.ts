@@ -7,6 +7,7 @@ import {
 import {
   finslipaCancel,
   finslipaCheck,
+  finslipaClean,
   finslipaMerge,
   finslipaStart,
   finslipaStatus,
@@ -133,6 +134,27 @@ server.setRequestHandler(ListToolsRequestSchema, () => ({
         required: ["sessionId"],
       },
     },
+    {
+      name: "finslipa_clean",
+      description:
+        "Delete session directories that have been cancelled or completed.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          sessionId: {
+            type: "string",
+            description:
+              "Specific session ID to clean. If not provided, cleans all finished sessions.",
+          },
+          status: {
+            type: "string",
+            enum: ["completed", "cancelled"],
+            description:
+              "Clean only sessions with this status. If not provided, cleans all finished sessions.",
+          },
+        },
+      },
+    },
   ],
 }));
 
@@ -186,6 +208,14 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
     }
     case "finslipa_cancel": {
       const result = await finslipaCancel(args as { sessionId: string });
+      return {
+        content: [{ type: "text", text: JSON.stringify(result, null, 2) }],
+      };
+    }
+    case "finslipa_clean": {
+      const result = await finslipaClean(
+        args as { sessionId?: string; status?: "completed" | "cancelled" }
+      );
       return {
         content: [{ type: "text", text: JSON.stringify(result, null, 2) }],
       };
