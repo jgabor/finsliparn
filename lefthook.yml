@@ -2,17 +2,17 @@ pre-commit:
   parallel: true
   commands:
     typescript:
-      run: bunx ultracite fix
+      run: bunx ultracite fix {staged_files}
       stage_fixed: true
       glob: "*.{js,jsx,ts,tsx,json,jsonc}"
     markdown:
-      run: bunx markdownlint --dot --fix --disable MD013 MD029 MD033 MD036 MD040 --
+      run: bunx markdownlint --dot --fix --disable MD013 MD029 MD033 MD036 MD040 -- {staged_files}
       stage_fixed: true
       glob: "*.md"
     configs:
+      run: bunx prettier --write {staged_files}
       stage_fixed: true
       glob: "*.{json,yml,yaml}"
-      run: "bunx prettier --write {staged_files}"
 
 pre-push:
   parallel: true
