@@ -858,6 +858,32 @@ export async function finslipaCancel(args: {
   }
 }
 
+async function commitWorktreeChanges(
+  worktreePath: string,
+  sessionId: string,
+  iteration: number,
+  score: number | undefined
+): Promise<boolean> {
+  const worktreeGit = simpleGit(worktreePath);
+  const status = await worktreeGit.status();
+
+  if (status.modified.length === 0 && status.created.length === 0) {
+    return false;
+  }
+
+  await worktreeGit.add(".");
+  await worktreeGit.commit(
+    `finsliparn: iteration ${iteration} (score: ${score})`
+  );
+  log.info("Committed worktree changes", {
+    sessionId,
+    iteration,
+    modified: status.modified.length,
+    created: status.created.length,
+  });
+  return true;
+}
+
 export async function finslipaMerge(args: {
   sessionId: string;
   iterationNumber?: number;
@@ -940,6 +966,14 @@ export async function finslipaMerge(args: {
       const branchName = `finsliparn/${session.id}/iteration-${targetIteration}`;
 
       try {
+        // Commit any uncommitted changes in the worktree first
+        await commitWorktreeChanges(
+          iteration.worktreePath,
+          session.id,
+          targetIteration,
+          iteration.score
+        );
+
         // Merge the iteration branch into current branch
         await git.merge([
           branchName,
