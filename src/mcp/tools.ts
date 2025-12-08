@@ -18,6 +18,7 @@ import type {
   MergeEligibility,
   QualityAnalysis,
   RefinementSession,
+  ScorePlateau,
   SolutionMemory,
   TestResults,
   ToolResponse,
@@ -63,6 +64,65 @@ function checkMergeEligibility(
   return { canMerge, reason, isPerfectScore, completedIterations };
 }
 
+function detectScorePlateau(session: RefinementSession): ScorePlateau {
+  const completedIterations = session.iterations.filter(
+    (iter) => iter.status === "completed" && iter.score !== undefined
+  );
+
+  if (completedIterations.length < 2) {
+    return { detected: false, stagnantIterations: 0, plateauScore: 0 };
+  }
+
+  const scores = completedIterations.map((iter) => iter.score ?? 0);
+  const latestScore = scores.at(-1) ?? 0;
+
+  let stagnantCount = 1;
+  for (let i = scores.length - 2; i >= 0; i -= 1) {
+    if (scores[i] === latestScore) {
+      stagnantCount += 1;
+    } else {
+      break;
+    }
+  }
+
+  const latestIteration = completedIterations.at(-1);
+  const primaryPenalty = latestIteration?.scoreBreakdown?.penalties[0];
+
+  return {
+    detected: stagnantCount >= 2,
+    stagnantIterations: stagnantCount,
+    plateauScore: latestScore,
+    primaryPenalty,
+  };
+}
+
+function buildPlateauGuidance(plateau: ScorePlateau): string[] {
+  const steps: string[] = [
+    `⚠️ Score plateau: ${plateau.plateauScore}% for ${plateau.stagnantIterations} consecutive iterations`,
+  ];
+
+  if (plateau.primaryPenalty) {
+    const penalty = plateau.primaryPenalty;
+    if (penalty.reason.includes("complexity")) {
+      steps.push(
+        "PRIMARY ISSUE: High complexity penalty - split large changes into smaller commits"
+      );
+      steps.push(
+        "Try: Extract helper functions, remove unused code, simplify logic"
+      );
+    } else if (penalty.reason.includes("test")) {
+      steps.push(
+        `PRIMARY ISSUE: ${penalty.reason} - focus on fixing failing tests`
+      );
+    } else {
+      steps.push(`PRIMARY ISSUE: ${penalty.reason} (${penalty.deduction} pts)`);
+    }
+  }
+
+  steps.push("REQUIRED: Make a DIFFERENT change than previous iterations");
+  return steps;
+}
+
 type NextStepsContext = {
   testResults: TestResults;
   diffAnalysis?: DiffAnalysis;
@@ -89,8 +149,13 @@ function buildMergeReadySteps(
 function buildContinueIteratingSteps(
   eligibility: MergeEligibility,
   diffAnalysis?: DiffAnalysis,
-  remainingIterations?: number
+  remainingIterations?: number,
+  plateau?: ScorePlateau
 ): string[] {
+  if (plateau?.detected) {
+    return buildPlateauGuidance(plateau);
+  }
+
   const steps = [
     `Tests passing but ${eligibility.reason}`,
     `Completed: ${eligibility.completedIterations}/2 minimum iterations`,
@@ -138,10 +203,12 @@ function buildNextSteps(context: NextStepsContext): string[] {
       if (eligibility.canMerge) {
         return buildMergeReadySteps(verbose, diffAnalysis);
       }
+      const plateau = detectScorePlateau(session);
       return buildContinueIteratingSteps(
         eligibility,
         diffAnalysis,
-        remainingIterations
+        remainingIterations,
+        plateau
       );
     }
     return buildMergeReadySteps(verbose, diffAnalysis);
@@ -586,6 +653,9 @@ async function buildCheckSuccessResponse(
       ? checkMergeEligibility(updatedSession, latestIteration)
       : undefined;
 
+  const plateau = updatedSession
+    ? detectScorePlateau(updatedSession)
+    : undefined;
   const remainingIterations = maxIterations - iteration;
 
   return {
@@ -601,6 +671,8 @@ async function buildCheckSuccessResponse(
       remainingIterations,
       mergeEligible: mergeEligibility?.canMerge ?? false,
       mergeReason: mergeEligibility?.reason,
+      scorePlateau: plateau?.detected ?? false,
+      plateauIterations: plateau?.stagnantIterations,
     },
     nextSteps: buildNextSteps({
       testResults: testPhaseResult.testResults,

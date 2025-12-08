@@ -154,6 +154,12 @@ See [docs/spec-cc.md](docs/spec-cc.md) for detailed technical specifications.
 - [x] **Anti-Bypass Warning**
   - [x] Add warning to directive when tests pass but not merge-eligible
   - [x] Explicit guidance: "DO NOT manually merge with git"
+- [x] **Score Plateau Detection**
+  - [x] Add `ScorePlateau` type to track stagnant iterations
+  - [x] Detect when score hasn't improved for 2+ consecutive iterations
+  - [x] Include `scorePlateau` and `plateauIterations` in response data
+  - [x] Add "🚨 Score Plateau Detected" warning to directive
+  - [x] Provide actionable guidance based on primary penalty (complexity, tests)
 
 ## Milestone: Parallel Experts
 

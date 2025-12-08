@@ -150,6 +150,13 @@ export type MergeEligibility = {
   completedIterations: number;
 };
 
+export type ScorePlateau = {
+  detected: boolean;
+  stagnantIterations: number;
+  plateauScore: number;
+  primaryPenalty?: ScorePenalty;
+};
+
 // Directive Types
 export type DirectiveContext = {
   session: RefinementSession;

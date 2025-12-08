@@ -4,6 +4,7 @@ import type {
   DirectiveContext,
   IterationResult,
   RefinementSession,
+  ScorePenalty,
 } from "../types";
 import { FeedbackGenerator } from "./feedback-generator";
 
@@ -24,6 +25,80 @@ function isMergeEligible(
     canMerge: completedIterations >= 2 || isPerfectScore,
     completedIterations,
   };
+}
+
+type PlateauInfo = {
+  detected: boolean;
+  count: number;
+  primaryPenalty?: ScorePenalty;
+};
+
+function detectPlateau(session: RefinementSession): PlateauInfo {
+  const completed = session.iterations.filter(
+    (iter) => iter.status === "completed" && iter.score !== undefined
+  );
+
+  if (completed.length < 2) {
+    return { detected: false, count: 0 };
+  }
+
+  const scores = completed.map((iter) => iter.score ?? 0);
+  const latestScore = scores.at(-1) ?? 0;
+
+  let stagnantCount = 1;
+  for (let i = scores.length - 2; i >= 0; i -= 1) {
+    if (scores[i] === latestScore) {
+      stagnantCount += 1;
+    } else {
+      break;
+    }
+  }
+
+  const latestIteration = completed.at(-1);
+  const primaryPenalty = latestIteration?.scoreBreakdown?.penalties[0];
+
+  return {
+    detected: stagnantCount >= 2,
+    count: stagnantCount,
+    primaryPenalty,
+  };
+}
+
+function buildPenaltyGuidance(penalty: ScorePenalty): string {
+  if (penalty.reason.includes("complexity")) {
+    return (
+      `- **Primary issue**: ${penalty.reason} (-${penalty.deduction} pts)\n` +
+      "- **Action**: Reduce code complexity - extract functions, remove duplication, simplify logic\n" +
+      "- **Goal**: Smaller, more focused changes will reduce the complexity penalty\n"
+    );
+  }
+  if (penalty.reason.includes("test")) {
+    return (
+      `- **Primary issue**: ${penalty.reason} (-${penalty.deduction} pts)\n` +
+      "- **Action**: Fix the failing tests before continuing\n"
+    );
+  }
+  return (
+    `- **Primary issue**: ${penalty.reason} (-${penalty.deduction} pts)\n` +
+    "- **Action**: Address this penalty to improve the score\n"
+  );
+}
+
+function buildPlateauWarning(
+  plateau: PlateauInfo,
+  score: number | undefined
+): string {
+  let content = "## 🚨 Score Plateau Detected\n\n";
+  content += `Score has been **${score}%** for **${plateau.count} consecutive iterations**.\n\n`;
+  content += "**You MUST try a different approach:**\n\n";
+
+  if (plateau.primaryPenalty) {
+    content += buildPenaltyGuidance(plateau.primaryPenalty);
+  }
+
+  content +=
+    "\n**Previous iterations have NOT improved the score. Repeating the same approach will NOT work.**\n\n";
+  return content;
 }
 
 export class DirectiveWriter {
@@ -79,6 +154,12 @@ export class DirectiveWriter {
           "- DO NOT manually merge with git - use `finslipa_merge` to ensure proper tracking\n";
         content += `- Current: Score ${latestIteration.score}% | Iterations ${eligibility.completedIterations}/2 minimum | Remaining ${session.maxIterations - latestIteration.iteration}\n\n`;
       }
+    }
+
+    // Plateau warning
+    const plateau = detectPlateau(session);
+    if (plateau.detected) {
+      content += buildPlateauWarning(plateau, latestIteration.score);
     }
 
     // Task description
