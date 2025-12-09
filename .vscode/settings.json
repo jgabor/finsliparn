@@ -30,9 +30,16 @@
   "typescript.tsdk": "node_modules/typescript/lib",
   "editor.formatOnSave": true,
   "editor.formatOnPaste": true,
-  "emmet.showExpandedAbbreviation": "never",
   "editor.codeActionsOnSave": {
     "source.fixAll.biome": "explicit",
     "source.organizeImports.biome": "explicit"
-  }
+  },
+  "markdownlint.config": {
+    "fenced-code-language": false,
+    "no-emphasis-as-heading": false,
+    "no-inline-html": false,
+    "ol-prefix": false,
+    "blanks-around-lists": false
+  },
+  "markdownlint.run": "onSave"
 }
