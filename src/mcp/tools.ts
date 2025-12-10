@@ -169,7 +169,7 @@ function buildContinueIteratingSteps(
 
   if (remainingIterations !== undefined && remainingIterations > 0) {
     steps.push(
-      `${remainingIterations} iteration(s) remaining - continue refining, then call finslipa_check`
+      "⚠️ REQUIRED: Make code improvements NOW, then call finslipa_check immediately. Do NOT wait for user input."
     );
   }
 
@@ -245,7 +245,8 @@ type AnalysisPhaseResult = {
 async function setupWorktree(
   worktreeManager: WorktreeManager,
   sessionId: string,
-  iteration: number
+  iteration: number,
+  baseBranch = "main"
 ): Promise<{ workingDirectory: string; worktreePath?: string } | ToolResponse> {
   const branchName = `finsliparn/${sessionId}/iteration-${iteration}`;
   const expectedPath = worktreeManager.getWorktreePath(branchName);
@@ -266,11 +267,15 @@ async function setupWorktree(
   }
 
   try {
-    const worktreePath = await worktreeManager.createWorktree(branchName);
+    const worktreePath = await worktreeManager.createWorktree(
+      branchName,
+      baseBranch
+    );
     log.info("Worktree created for iteration", {
       sessionId,
       iteration,
       worktreePath,
+      baseBranch,
     });
     return { workingDirectory: worktreePath, worktreePath };
   } catch (error) {
@@ -278,6 +283,7 @@ async function setupWorktree(
       sessionId,
       iteration,
       branchName,
+      baseBranch,
       error: String(error),
     });
     return {
@@ -630,6 +636,64 @@ function isToolResponse(value: unknown): value is ToolResponse {
   );
 }
 
+function validateChangesExist(diffAnalysis: DiffAnalysis): ToolResponse | null {
+  if (diffAnalysis.filesChanged.length === 0) {
+    return {
+      success: false,
+      message: "No changes detected since last iteration",
+      error: {
+        code: "NO_CHANGES",
+        details:
+          "Make code changes before calling finslipa_check again. The iteration was not counted.",
+      },
+    };
+  }
+  return null;
+}
+
+function getIterationBaseBranch(sessionId: string, iteration: number): string {
+  return iteration > 1
+    ? `finsliparn/${sessionId}/iteration-${iteration - 1}`
+    : "main";
+}
+
+async function validateAndPrepareSession(
+  sessionManager: SessionManager,
+  sessionId: string
+): Promise<RefinementSession | ToolResponse> {
+  const session = await sessionManager.loadSession(sessionId);
+  if (!session) {
+    return {
+      success: false,
+      message: `Session ${sessionId} not found`,
+      error: {
+        code: "SESSION_NOT_FOUND",
+        details: `No session with ID ${sessionId}`,
+      },
+    };
+  }
+
+  log.debug("Starting check", {
+    sessionId,
+    currentIteration: session.currentIteration,
+    maxIterations: session.maxIterations,
+  });
+
+  if (session.currentIteration >= session.maxIterations) {
+    await sessionManager.updateSessionStatus(sessionId, "failed");
+    return {
+      success: false,
+      message: `Max iterations (${session.maxIterations}) reached`,
+      error: {
+        code: "MAX_ITERATIONS_REACHED",
+        details: `Session has reached the maximum of ${session.maxIterations} iterations. Consider starting a new session or increasing maxIterations.`,
+      },
+    };
+  }
+
+  return session;
+}
+
 type CheckSuccessContext = {
   sessionManager: SessionManager;
   sessionId: string;
@@ -694,35 +758,14 @@ export async function finslipaCheck(args: {
 
   try {
     return await sessionManager.withLock(args.sessionId, async () => {
-      const session = await sessionManager.loadSession(args.sessionId);
-      if (!session) {
-        return {
-          success: false,
-          message: `Session ${args.sessionId} not found`,
-          error: {
-            code: "SESSION_NOT_FOUND",
-            details: `No session with ID ${args.sessionId}`,
-          },
-        };
+      const sessionResult = await validateAndPrepareSession(
+        sessionManager,
+        args.sessionId
+      );
+      if (isToolResponse(sessionResult)) {
+        return sessionResult;
       }
-
-      log.debug("Starting check", {
-        sessionId: args.sessionId,
-        currentIteration: session.currentIteration,
-        maxIterations: session.maxIterations,
-      });
-
-      if (session.currentIteration >= session.maxIterations) {
-        await sessionManager.updateSessionStatus(args.sessionId, "failed");
-        return {
-          success: false,
-          message: `Max iterations (${session.maxIterations}) reached`,
-          error: {
-            code: "MAX_ITERATIONS_REACHED",
-            details: `Session has reached the maximum of ${session.maxIterations} iterations. Consider starting a new session or increasing maxIterations.`,
-          },
-        };
-      }
+      const session = sessionResult;
 
       await sessionManager.updateSessionStatus(args.sessionId, "iterating");
 
@@ -731,10 +774,14 @@ export async function finslipaCheck(args: {
       let worktreePath: string | undefined;
 
       if (args.useWorktree ?? true) {
+        // Base new iterations on previous iteration's branch to carry forward changes
+        const baseBranch = getIterationBaseBranch(session.id, iteration);
+
         const worktreeResult = await setupWorktree(
           worktreeManager,
           session.id,
-          iteration
+          iteration,
+          baseBranch
         );
         if (isToolResponse(worktreeResult)) {
           return worktreeResult;
@@ -757,6 +804,14 @@ export async function finslipaCheck(args: {
         }
 
         const analysisResult = runAnalysisPhase(testPhaseResult);
+
+        // Validate that actual changes exist before counting iteration
+        const noChangesError = validateChangesExist(
+          testPhaseResult.diffAnalysis
+        );
+        if (noChangesError) {
+          return noChangesError;
+        }
 
         await persistIterationPhase(
           sessionManager,

@@ -154,6 +154,14 @@ export class DirectiveWriter {
           "- DO NOT manually merge with git - use `finslipa_merge` to ensure proper tracking\n";
         content += `- Current: Score ${latestIteration.score}% | Iterations ${eligibility.completedIterations}/2 minimum | Remaining ${session.maxIterations - latestIteration.iteration}\n\n`;
       }
+
+      // Auto-continue instruction
+      content += "## ⚠️ Auto-Continue Required\n\n";
+      content += "You MUST:\n";
+      content += "1. Make code improvements NOW\n";
+      content += "2. Call `finslipa_check` immediately after\n\n";
+      content +=
+        "Do NOT report status and wait. Do NOT ask for confirmation.\n\n";
     }
 
     // Plateau warning

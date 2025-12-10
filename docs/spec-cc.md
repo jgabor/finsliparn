@@ -741,6 +741,8 @@ export async function detectTestRunner(cwd: string): Promise<TestRunner> {
 
 ### 7.2 Worktree Manager
 
+**Important**: Iteration worktrees must be based on the previous iteration's branch, not `main`. This ensures code changes carry forward between iterations. Without this, each iteration would start fresh from `main` and lose all previous work.
+
 ```typescript
 // core/worktree-manager.ts
 import { simpleGit, SimpleGit } from "simple-git";
@@ -760,12 +762,18 @@ class WorktreeManager {
     this.baseDir = `${projectPath}/.finsliparn/worktrees`;
   }
 
-  async create(sessionId: string, iterationId: string): Promise<WorktreeInfo> {
+  async create(
+    sessionId: string,
+    iterationId: string,
+    baseBranch: string = "main"  // CRITICAL: Pass previous iteration's branch for iteration > 1
+  ): Promise<WorktreeInfo> {
     const branchName = `finsliparn/${sessionId}/${iterationId}`;
     const worktreePath = `${this.baseDir}/${sessionId}-${iterationId}`;
 
-    // Create worktree from current HEAD
-    await this.git.raw(["worktree", "add", "-b", branchName, worktreePath]);
+    // Create worktree from the specified base branch
+    // - Iteration 1: baseBranch = "main"
+    // - Iteration N: baseBranch = "finsliparn/{sessionId}/iteration-{N-1}"
+    await this.git.raw(["worktree", "add", "-B", branchName, worktreePath, baseBranch]);
 
     const sha = await this.git.revparse(["HEAD"]);
 

@@ -6,6 +6,24 @@ See [docs/spec-cc.md](docs/spec-cc.md) for detailed technical specifications.
 
 ---
 
+## Milestone: Iteration Loop Fixes
+
+**Goal**: Fix LLM halting behavior and prevent premature merge completion.
+
+### Bug Fixes
+
+- [x] **Fix 1: Imperative language in nextSteps and directive** (`src/mcp/tools.ts`, `src/core/directive-writer.ts`)
+  - [x] Change passive "continue refining, then call finslipa_check" to imperative "REQUIRED: Make changes NOW, call finslipa_check immediately"
+  - [x] Add auto-continue section to directive.md when not merge-eligible
+- [x] **Fix 2: Base new iterations on previous iteration's branch** (`src/mcp/tools.ts`)
+  - [x] Pass previous iteration's branch as baseBranch to createWorktree
+  - [x] Ensures code changes carry forward between iterations
+- [x] **Fix 3: Prevent counting iterations without actual changes** (`src/mcp/tools.ts`)
+  - [x] Validate `diffAnalysis.filesChanged > 0` before counting iteration
+  - [x] Return error if no changes detected since last iteration
+
+---
+
 ## Milestone: Parallel Experts
 
 **Goal**: Move from "Single Expert" to "Parallel Exploration".
