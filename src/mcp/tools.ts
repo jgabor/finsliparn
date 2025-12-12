@@ -642,6 +642,9 @@ async function createParallelExpertSession(
   } = ctx;
   const baseSeed = Math.floor(Math.random() * 1_000_000);
   await sessionManager.initializeExperts(session.id, expertCount, baseSeed);
+  const updatedSession = (await sessionManager.loadSession(
+    session.id
+  )) as RefinementSession;
 
   const workingDirectories: string[] = [];
   const expertErrors: string[] = [];
@@ -655,10 +658,10 @@ async function createParallelExpertSession(
       );
       workingDirectories.push(worktreePath);
 
-      const expert = await sessionManager.getExpert(session.id, expertId);
+      const expert = updatedSession.experts?.find((e) => e.id === expertId);
       await directiveWriter.write(
         {
-          session: { ...session, mode: "parallel", expertCount, baseSeed },
+          session: updatedSession,
           latestIteration: {
             iteration: 1,
             status: "pending",
@@ -668,7 +671,7 @@ async function createParallelExpertSession(
             expertId,
           },
           nextActions: [
-            `Implement the task: ${session.taskDescription}`,
+            `Implement the task: ${updatedSession.taskDescription}`,
             "Then call finslipa_check to validate with tests",
           ],
           specHints: specHints.length > 0 ? specHints : undefined,
@@ -678,7 +681,7 @@ async function createParallelExpertSession(
       );
 
       log.info("Expert worktree created", {
-        sessionId: session.id,
+        sessionId: updatedSession.id,
         expertId,
         seed: expert?.seed,
         worktreePath,
