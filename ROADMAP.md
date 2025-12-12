@@ -1,231 +1,133 @@
 # Finsliparn Roadmap
 
-This document outlines the development phases for Finsliparn, from the initial Proof of Concept (PoC) to the full Multi-Expert MVP.
-
 See [docs/spec-cc.md](docs/spec-cc.md) for detailed technical specifications.
 
 ---
 
-## Milestone: Iteration Loop Fixes
+## Milestone: Test Coverage for Distribution (P0)
 
-**Goal**: Fix LLM halting behavior and prevent premature merge completion.
+**Goal**: Critical tests required before npm publish.
 
-### Bug Fixes
+### MCP Tool Tests
 
-- [x] **Fix 1: Imperative language in nextSteps and directive** (`src/mcp/tools.ts`, `src/core/directive-writer.ts`)
-  - [x] Change passive "continue refining, then call finslipa_check" to imperative "REQUIRED: Make changes NOW, call finslipa_check immediately"
-  - [x] Add auto-continue section to directive.md when not merge-eligible
-- [x] **Fix 2: Base new iterations on previous iteration's branch** (`src/mcp/tools.ts`)
-  - [x] Pass previous iteration's branch as baseBranch to createWorktree
-  - [x] Ensures code changes carry forward between iterations
-- [x] **Fix 3: Prevent counting iterations without actual changes** (`src/mcp/tools.ts`)
-  - [x] Validate `diffAnalysis.filesChanged > 0` before counting iteration
-  - [x] Return error if no changes detected since last iteration
+- [ ] **finslipaStart** (`src/mcp/tools.test.ts`)
+  - [ ] creates session with correct defaults
+  - [ ] respects maxIterations parameter
+  - [ ] respects mergeThreshold parameter
+  - [ ] detects and offers resume for active session
+  - [ ] forceNew creates new session despite active one
+  - [ ] parallel mode creates N expert worktrees
+  - [ ] returns correct working directories
 
----
+- [ ] **finslipaCheck** (`src/mcp/tools.test.ts`)
+  - [ ] runs tests and returns score
+  - [ ] updates session with iteration result
+  - [ ] creates next iteration worktree based on previous
+  - [ ] worktreePath parameter overrides cwd detection
+  - [ ] worktreePath detects expert ID correctly
+  - [ ] handles test timeout gracefully
+  - [ ] handles no test runner gracefully
 
-## Milestone: Parallel Experts
-
-**Goal**: Move from "Single Expert" to "Parallel Exploration".
-
-### Design Decisions
-
-- Single-expert mode keeps root `.finsliparn/directive.md` (backward compat)
-- Parallel directive location: `.finsliparn/sessions/{id}/directives/expert-{N}.md`
-- Worktree structure: nested `finsliparn/{sessionId}/expert-{E}/iteration-{N}`
-- Expert ID auto-detected from worktree path
-- Seed formula: `baseSeed + expertId * maxIterations`
-- Race termination: all experts run to completion, vote at end
-- Expert count fixed at session start (no hot-joining)
-- MVP voting: `highest_score` only (cross-expert comparison)
-- Orchestration: Claude Code Task tool spawns parallel agents (not in Finsliparn codebase)
-- Iterations always increment regardless of code changes (preserves seed predictability)
-- Default `maxIterations`: 10 (more exploration opportunities)
-- Default `shuffleExamples`: true (increases diversity between experts)
-
-### Implementation Order
-
-1. Types → 2. Worktree Manager → 3. Session Manager → 4. Directive Writer → 5. Tools
-
-### Implementation
-
-- [x] **Phase 1: Type Updates** (`src/types/index.ts`)
-  - [x] Add `mode: "single" | "parallel"` to `RefinementSession`
-  - [x] Add `expertCount`, `experts`, `selectedExpertId`, `baseSeed` fields
-  - [x] Add `ExpertState` type with `id`, `seed`, `currentIteration`, `iterations[]`, `bestIteration`, `bestScore`, `status`
-  - [x] Add `expertId?: number` to `IterationResult`
-- [x] **Phase 2: Worktree Manager** (`src/core/worktree-manager.ts`)
-  - [x] Add `createExpertWorktree(sessionId, expertId, iteration, baseBranch)`
-  - [x] Add `detectExpertFromPath(worktreePath)` → `{ expertId, iteration } | null`
-  - [x] Update `listSessionWorktreePaths()` for 4-level nesting
-- [x] **Phase 3: Session Manager** (`src/core/session-manager.ts`)
-  - [x] Add `initializeExperts(sessionId, count, baseSeed)` method
-  - [x] Add `getExpert(sessionId, expertId)` / `updateExpert(sessionId, expertId, state)` methods
-  - [x] Add `addIterationToExpert(sessionId, expertId, iteration)` method
-  - [x] Seed formula: `baseSeed + expertId * maxIterations`
-  - [x] Lock scope: per-expert in parallel mode (`{sessionId}:expert-{E}`)
-- [x] **Phase 4: Directive Writer** (`src/core/directive-writer.ts`)
-  - [x] Add `writeForExpert(context, expertId)` method
-  - [x] Path logic: parallel → `sessions/{id}/directives/expert-{N}.md`
-  - [x] Add `writeRaceSummary(session)` for `race.md`
-  - [x] Update `write()` to delegate based on `session.mode`
-- [x] **Phase 5: Tool Updates** (`src/mcp/tools.ts`)
-  - [x] `finslipa_start`: add `expertCount` parameter (default: 1), create N worktrees/directives, return array of working directories
-  - [x] `finslipa_check`: auto-detect expert ID from cwd, scope to expert's iteration counter and state
-  - [x] `finslipa_vote`: collect best from each expert, apply `highest_score` cross-expert, set `selectedExpertId`, generate `race.md`
-  - [x] `finslipa_merge`: use `selectedExpertId` to find correct branch, cleanup all expert worktrees
-
-### Voting System
-
-- [x] Single-expert voting: `highest_score`, `minimal_diff`, `balanced`, `consensus`
-- [x] Cross-expert voting: `highest_score` (MVP)
+- [ ] **finslipaMerge** (`src/mcp/tools.test.ts`)
+  - [ ] merges winning iteration to main
+  - [ ] respects mergeThreshold (blocks if below)
+  - [ ] cleans up worktrees after merge
+  - [ ] handles unstaged changes gracefully
+  - [ ] parallel mode merges selected expert
 
 ---
 
-## Milestone: Dogfooding (Consensus Voting via Parallel Experts)
+## Milestone: Test Coverage (P1)
 
-**Goal**: Validate parallel experts by using Finsliparn to implement consensus voting in itself.
+**Goal**: High-priority tests for robustness.
 
-### Why This Task
+### Cleanup Tool Tests
 
-- Real feature from roadmap (not artificial test)
-- Multiple valid algorithms (hash-based, deep equality, normalized comparison)
-- Clear TDD criteria (4 failing tests → all pass)
-- Isolated change (won't break running MCP server)
+- [ ] **finslipaCancel** (`src/mcp/tools.test.ts`)
+  - [ ] cleans up session worktrees
+  - [ ] sets session status to cancelled
+  - [ ] handles already-cancelled session
 
-### Safety Analysis
+- [ ] **finslipaClean** (`src/mcp/tools.test.ts`)
+  - [ ] removes completed session directories
+  - [ ] removes cancelled session directories
+  - [ ] selective cleanup by status
 
-When Finsliparn modifies its own code:
+### Core Component Tests
 
-- MCP server continues with OLD code during session
-- `bun test` spawns subprocess with MODIFIED code
-- Tests validate new code independently
-- After merge, server restarts with improvements
+- [ ] **WorktreeManager** (`src/core/index.test.ts`)
+  - [ ] creates worktree from branch
+  - [ ] creates expert worktree with correct nesting
+  - [ ] lists session worktrees
+  - [ ] cleanup removes all session worktrees
 
-### Dogfooding Steps
+### Error Handling
 
-- [x] **Phase 1: Write failing tests** (`src/mcp/tools.test.ts`)
-  - [x] `groups identical outputs together`
-  - [x] `counts votes per output group`
-  - [x] `ranks groups by vote count descending`
-  - [x] `uses score as tiebreaker within same vote count`
-- [x] **Phase 2: Run parallel session**
-  - [x] `finslipa_start` with expertCount: 3, maxIterations: 5
-  - [x] Each expert implements `consensus` strategy differently
-- [x] **Phase 3: Vote and merge**
-  - [x] Manual selection (Task agents lack MCP access for `finslipa_check`)
-  - [x] Expert 0's implementation integrated
-- [x] **Phase 4: Validation**
-  - [x] All 4 consensus tests pass
-  - [x] All existing tests still pass (38 total)
-  - [x] Feature works in production
-
-### Results
-
-- 3 experts spawned via Task tool, each working in isolated worktree
-- Each expert had unique seed (90487, 90490, 90493)
-- All 3 experts passed all 38 tests independently
-- Expert 0's implementation selected and merged (`e2f3441`)
-- `selectConsensusWinner` helper extracted for cognitive complexity
-
-### Learnings
-
-- Task agents cannot call MCP tools (finslipa_check) - need different orchestration
-- Manual verification and merge still validates the parallel approach
-- Seed diversity worked (unique seeds per expert confirmed in directives)
+- [ ] SESSION_NOT_FOUND returns helpful error
+- [ ] GIT_ERROR during merge returns conflict info
+- [ ] TEST_TIMEOUT returns partial results
 
 ---
 
-## Milestone: Parent Orchestration for Claude Code
+## Milestone: Test Coverage (P2)
 
-**Goal**: Enable proper iteration tracking when using Claude Code's Task subagents for parallel experts.
+**Goal**: Nice-to-have tests for edge cases.
 
-### Problem
+### Integration Tests
 
-Task subagents lack MCP access - they cannot call `finslipa_check` to register iterations. This is Claude Code-specific; Copilot CLI agents have direct MCP access.
+- [ ] single expert: start → check → vote → merge
+- [ ] parallel experts: start → spawn → check each → vote → merge
 
-### Solution: Parent Orchestration
+### Test Runner Detection
 
-Parent session calls `finslipa_check` on behalf of each expert after they complete.
+- [ ] detects bun test
+- [ ] detects vitest
+- [ ] detects jest
+- [ ] falls back to configured command
 
-```
-Parent:
-  1. finslipa_start(expertCount: N) → worktree paths
-  2. Spawn N Task agents (each implements + runs `bun test`)
-  3. Wait for agents to complete
-  4. For each expert:
-       finslipa_check(sessionId, worktreePath: expert's path)
-  5. finslipa_vote(sessionId)
-  6. finslipa_merge(sessionId)
-```
+### Edge Cases
 
-### Orchestration Implementation
-
-- [x] **Phase 1: Add `worktreePath` parameter to `finslipa_check`**
-  - [x] Accept optional `worktreePath` parameter (overrides cwd detection)
-  - [x] Auto-detect expertId from provided path via `detectExpertFromPath()`
-  - [x] Validated: parent orchestration flow works end-to-end
-- [ ] **Phase 2: Completion detection**
-  - [ ] Subagents write `.finsliparn-done` marker on completion
-  - [ ] Parent polls for markers or uses Task completion status
-- [ ] **Phase 3: Documentation**
-  - [ ] Update parallel experts documentation with orchestration pattern
-  - [ ] Add example prompts for spawning subagents
-
-### Orchestration Design Decisions
-
-- Parent orchestration is Claude Code-specific (Copilot uses direct MCP)
-- `worktreePath` parameter enables external callers (parent, CI/CD)
-- No HTTP endpoint needed (keeps architecture simple)
-- Copilot support unaffected (agents call MCP directly)
+- [ ] empty iteration (no code changes)
+- [ ] all tests failing
+- [ ] merge conflict resolution
 
 ---
-
-## Milestone: Dogfooding Round 2 (Diversity-First Ordering)
-
-**Goal**: Validate parent orchestration by implementing diversity-first ordering in voting.
-
-### Prerequisites
-
-- [x] Phase 1 of Parent Orchestration (`worktreePath` parameter)
-
-### Task: Diversity-First Ordering
-
-In voting, prioritize iterations with unique outputs before duplicates. Ensures diverse solutions are considered before redundant ones.
-
-### Round 2 Steps
-
-- [x] **Phase 1: Run parallel session with orchestration**
-  - [x] Write failing tests for diversity-first ordering
-  - [x] `finslipa_start` with expertCount: 3
-  - [x] Spawn 3 Task agents
-  - [x] Wait for all agents to complete
-  - [x] Parent calls `finslipa_check(sessionId, worktreePath)` for each expert
-- [x] **Phase 2: Vote and merge**
-  - [x] `finslipa_vote` selects winner
-  - [x] `finslipa_merge` integrates winning implementation
-- [x] **Phase 3: Validation**
-  - [x] Session state shows proper iteration counts per expert
-  - [x] All 42 tests pass after merge
-
-### Round 2 Results
-
-- 3 experts spawned via Task tool with parent orchestration
-- All experts achieved score 94 (100% tests, -6 complexity penalty)
-- Expert 0 selected (lowest complexity: 280 changes vs 302/328)
-- `buildDiversityFirstRanking()` function integrated (`f653cf6`)
-- Full automated flow validated: start → check(worktreePath) → vote → merge
-
----
-
-### Future Enhancements
-
-- [ ] Dashboard: local web UI to visualize race between experts
 
 ## Milestone: Packaging & Distribution
 
-- **NPM Package**
-- **Claude Plugin**
+**Goal**: Publish to npm and Claude Code plugin registry.
+
+- [ ] **NPM Package**
+  - [ ] Package.json configuration
+  - [ ] CLI entry point (`bunx finsliparn-mcp`)
+  - [ ] README with usage examples
+- [ ] **Claude Plugin**
+  - [ ] Plugin manifest
+  - [ ] Slash commands
+  - [ ] PostToolUse hook
+
+---
+
+## Milestone: Parent Orchestration Improvements
+
+**Goal**: Polish parallel experts workflow for Claude Code.
+
+- [ ] **Completion detection**
+  - [ ] Subagents write `.finsliparn-done` marker on completion
+  - [ ] Parent polls for markers or uses Task completion status
+- [ ] **Documentation**
+  - [ ] Update parallel experts documentation with orchestration pattern
+  - [ ] Add example prompts for spawning subagents
+
+---
+
+## Future: Dashboard UI
+
+- [ ] Local web UI to visualize race between experts
+- [ ] Real-time score updates
+- [ ] Diff viewer per iteration
+
+---
 
 ## Future: Copilot CLI Support (v2.0.0)
 
@@ -237,3 +139,30 @@ In voting, prioritize iterations with unique outputs before duplicates. Ensures 
 - [ ] **Platform Adapter**
   - [ ] Ensure `finslipa_check` is idempotent (safe for both Hook and Agent usage)
   - [ ] Verify `directive.md` provides sufficient context for a "blind" agent
+
+---
+
+## Completed
+
+- Fix 1: Imperative language in nextSteps and directive
+- Fix 2: Base new iterations on previous iteration's branch
+- Fix 3: Prevent counting iterations without actual changes
+
+- Type updates (mode, expertCount, ExpertState)
+- Worktree manager (createExpertWorktree, detectExpertFromPath)
+- Session manager (initializeExperts, seed formula)
+- Directive writer (expert-specific files, race.md)
+- Tool updates (expertCount parameter, cross-expert voting)
+
+- 3 experts implemented consensus voting
+- Expert 0 selected and merged (`e2f3441`)
+- `selectConsensusWinner` helper extracted
+
+- `worktreePath` parameter added to `finslipa_check`
+- Auto-detect expertId from provided path
+- Validated end-to-end flow
+
+- 3 experts with parent orchestration
+- All achieved score 94 (100% tests, -6 complexity)
+- Expert 0 selected (280 changes)
+- `buildDiversityFirstRanking()` integrated (`f653cf6`)
