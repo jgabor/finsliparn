@@ -152,7 +152,7 @@ Your implementation fails on edge cases. See detailed feedback in:
 
 ## DO NOT
 - Skip reading the feedback
-- Call `finslipa_complete` until all tests pass
+- Call `finslipa_merge` until all tests pass
 ```
 
 ```markdown
@@ -287,7 +287,7 @@ When the user describes a coding task:
 ## Validation Rules
 
 - NEVER skip reading feedback after a failed check
-- NEVER call `finslipa_complete` unless directive shows 100% score
+- NEVER call `finslipa_merge` unless directive shows 100% score
 - ALWAYS follow the directive's required actions
 - If stuck after 3 attempts on the same error, ask the user for guidance
 
@@ -405,7 +405,7 @@ This idempotency allows it to be called safely by both the Hook (v1.0.0) and the
 
 ## 5. Voting and Selection
 
-See `spec-cc.md` for the `DiffAnalyzer` and Voting logic. The Copilot agent triggers this via `finslipa_vote` when the directive status is `VOTING`.
+See `spec-cc.md` Section 4.4 (Diff Analyzer & Scoring) and Section 5.1 (Voting Algorithm). The Copilot agent triggers voting via `finslipa_vote` when the directive status is `VOTING`.
 
 ---
 

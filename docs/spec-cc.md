@@ -3,22 +3,20 @@
 - **Version**: 1.0.0 (Claude Code Edition)
 - **Status**: Specification
 - **Date**: 2025-12-07
-- **Author**: Jonathan Gabor
-- **Target Platform**: Claude Code
 
 ---
 
 ## About the Name
 
-**Finsliparn** (Swedish: _the honer_) — from _finslipa_, meaning "to hone", "to fine-tune" or "to put the finishing touches on." Swedes use this for final polishing: _"finslipa metoden"_ (perfect the method). The definite form _-arn_ gives it a craftsman quality, like naming a tool after the artisan who wields it (and just something Jonathan likes to call their random stuff).
+**Finsliparn** (Swedish: _the honer_) — from _finslipa_, meaning "to hone" or "to fine-tune." The definite form _-arn_ gives it a craftsman quality.
 
 ---
 
 ## 1. Executive Summary
 
-Finsliparn is a **Bun-native MCP server and Claude Code plugin** that applies iterative refinement and voting-based solution selection to coding tasks, adapting the methodology from Poetiq's [ARC-AGI solver](https://poetiq.ai/posts/arcagi_verified/).
+Finsliparn is a **Bun-native MCP server and Claude Code plugin** that applies iterative refinement and voting-based solution selection to coding tasks, adapting methodology from Poetiq's [ARC-AGI solver](https://poetiq.ai/posts/arcagi_verified/).
 
-**Core value**: Transform single-attempt coding into multi-attempt, test-validated refinement loops that produce higher-quality, more reliable solutions.
+**Core value**: Transform single-attempt coding into multi-attempt, test-validated refinement loops.
 
 ---
 
@@ -26,34 +24,11 @@ Finsliparn is a **Bun-native MCP server and Claude Code plugin** that applies it
 
 ### 2.1 Core Principles
 
-1. **Iterative Refinement**: Solutions improve through structured feedback loops, not single-shot attempts
-2. **Test-Driven Validation**: Test results are the objective truth—not diffs, not prompts, not opinions
-3. **State Persistence**: Filesystem (`directive.md`) is the single source of truth, enabling recovery and platform portability
+1. **Iterative Refinement**: Solutions improve through structured feedback loops
+2. **Test-Driven Validation**: Test results are the objective truth
+3. **State Persistence**: Filesystem (`directive.md`) is the single source of truth
 4. **Selection over Generation**: Select best of N solutions rather than generate one perfect solution
 5. **Non-Destructive Exploration**: Git worktrees enable parallel work without conflicts
-
-### 2.2 Key Design Decisions
-
-| Aspect                 | Approach                                                      |
-| ---------------------- | ------------------------------------------------------------- |
-| **Purpose**            | Solution refinement—same task, multiple iterative attempts    |
-| **State Management**   | **Filesystem-as-IPC** (`directive.md` drives the workflow)    |
-| **Trigger Mechanism**  | **Hooks** (Claude Code) or **Agent Polling** (Copilot)        |
-| **Selection**          | Automated selection via test results + complexity analysis    |
-| **Merge strategy**     | Winner-takes-all or cherry-pick best iteration                |
-| **Session resumption** | Prompt-based—inform user of existing session, let them choose |
-| **Spec validation**    | Lightweight hints—auto-detect spec files, include as context  |
-| **Merge protection**   | Configurable threshold, can be disabled entirely              |
-
-### 2.3 Architectural Patterns
-
-| Pattern                 | Implementation                                          |
-| ----------------------- | ------------------------------------------------------- |
-| **Structured workflow** | `Refine → Check → Vote → Merge` lifecycle               |
-| **Control Plane**       | `directive.md` acts as the state anchor for LLM context |
-| **MCP tool design**     | Consistent response format with `nextSteps` guidance    |
-| **State tracking**      | JSON-based iteration state in `.finsliparn/` directory  |
-| **Implementation logs** | Track each iteration's changes, test results, scores    |
 
 ---
 
@@ -64,31 +39,23 @@ Finsliparn is a **Bun-native MCP server and Claude Code plugin** that applies it
 ```mermaid
 graph TB
     subgraph ClaudeCode["Claude Code"]
-        subgraph Plugin["Finsliparn Plugin"]
-            Commands["Commands<br/>/finslipa<br/>/finslipa:*"]
-            Hooks["Hooks<br/>PostToolUse"]
-            MCP["MCP Server"]
-        end
+        Commands["/finslipa commands"]
+        Hooks["PostToolUse"]
+        MCP["MCP Server"]
     end
 
-    subgraph Orchestration["Orchestration Layer"]
-        subgraph Engine["Core Engine"]
-            Worktree["Worktree Management"]
-            Directive["Directive Writer"]
-            TestRunner["Test Runner"]
-            DiffAnalyzer["Diff/Complexity Analyzer"]
-        end
+    subgraph Engine["Core Engine"]
+        Worktree["Worktree Mgmt"]
+        Directive["Directive Writer"]
+        TestRunner["Test Runner"]
     end
 
-    subgraph Filesystem["Filesystem State"]
-        DirectiveFile["directive.md<br/>(Control Plane)"]
-        FeedbackFile["feedback/latest.md"]
+    subgraph State["Filesystem State"]
+        DirectiveFile["directive.md"]
         StateJson["state.json"]
     end
 
-    Plugin --> Orchestration
-    Orchestration --> Filesystem
-    Hooks -.->|"Reads"| DirectiveFile
+    ClaudeCode --> Engine --> State
 ```
 
 ### 3.2 Directory Structure
@@ -96,37 +63,24 @@ graph TB
 ```
 project/
 ├── .finsliparn/
-│   ├── config.toml              # User configuration
-│   ├── directive.md             # CRITICAL: The Control Plane (Next Actions)
-│   ├── sessions/
-│   │   └── {session-id}/
-│   │       ├── state.json       # Session state machine
-│   │       ├── iterations/
-│   │       │   ├── 1.json       # Iteration 1 results
-│   │       │   └── ...
-│   │       ├── feedback/
-│   │       │   ├── latest.md    # Symlink/Copy of current feedback
-│   │       │   ├── 1.md         # Iteration 1 feedback
-│   │       │   └── ...
-│   │       └── logs/
-│   └── worktrees/               # Managed worktrees
-├── .claude/
-│   └── plugins/
-│       └── finsliparn/          # Plugin installation
+│   ├── config.toml
+│   ├── directive.md              # Control Plane
+│   ├── sessions/{session-id}/
+│   │   ├── state.json
+│   │   ├── iterations/{N}.json
+│   │   └── feedback/{N}.md
+│   └── worktrees/
 └── [project files]
 ```
 
 ### 3.3 Technology Stack
 
-| Component            | Technology                    | Rationale                                             |
-| -------------------- | ----------------------------- | ----------------------------------------------------- |
-| **Runtime**          | Bun 1.3+                      | Native TypeScript, fast startup, built-in test runner |
-| **MCP SDK**          | `@modelcontextprotocol/sdk`   | Standard MCP implementation                           |
-| **Git operations**   | `simple-git` via Bun          | Cross-platform git worktree support                   |
-| **Process spawning** | `Bun.spawn()`                 | Native subprocess management                          |
-| **State storage**    | JSON files                    | Simple, human-readable, git-friendly                  |
-| **IPC**              | Unix sockets / named pipes    | Fast inter-process communication                      |
-| **Dashboard**        | Bun's native HTTP + WebSocket | Real-time progress updates                            |
+| Component | Technology |
+|-----------|------------|
+| Runtime | Bun 1.3+ |
+| MCP SDK | `@modelcontextprotocol/sdk` |
+| Git | `simple-git` |
+| State | JSON files |
 
 ---
 
@@ -134,1039 +88,306 @@ project/
 
 ### 4.1 Session Manager
 
-Manages refinement sessions and their lifecycle.
+**RefinementSession** tracks:
 
-```typescript
-interface RefinementSession {
-  id: string; // UUID v4
-  createdAt: string; // ISO 8601
-  status: SessionStatus;
-  config: SessionConfig;
-  problem: ProblemDefinition;
-  iterations: IterationResult[];
-  selectedIteration?: number; // Winner (after voting)
-}
+- `id`: UUID v4
+- `status`: initializing → implementing → iterating → evaluating → completed/failed/cancelled
+- `config`: maxIterations (10), targetScore (1.0), testCommand, testTimeout (60s), mergeThreshold (optional)
+- `problem`: task description and constraints
+- `iterations`: array of iteration results
+- `selectedIteration`: winner after voting
 
-type SessionStatus =
-  | "initializing"
-  | "implementing"
-  | "iterating"
-  | "evaluating" // After voting, before merge
-  | "completed"
-  | "failed"
-  | "cancelled";
+**SessionConfig options**:
 
-interface SessionConfig {
-  maxIterations: number; // Default: 10
-  targetScore: number; // Default: 1.0 (100%)
-  testCommand: string; // e.g., "bun test", "npm test"
-  testTimeout: number; // Default: 60000ms
-  expertCount: number; // Default: 1 (PoC), 3+ (MVP)
-  parallelExperts: boolean; // Default: false (PoC)
-  mergeThreshold?: number; // Score threshold for merge (undefined = disabled)
-  shuffleExamples: boolean; // Default: true - randomize feedback order
-}
+- `shuffleExamples`: Randomize example order using `seed + iteration` for deterministic diversity (default: true)
+- `improvingOrder`: Present feedback examples worst→best to guide improvement trajectory (default: true)
+- `selectionProbability`: Probability of including each past solution in feedback (default: 1.0)
+- `returnBestResult`: Return highest-scoring iteration, not last (default: true)
+- `expertCount`: Number of parallel experts (default: 1)
+- `parallelExperts`: Enable parallel mode (default: false)
 
-// Session Manager also provides active session detection
-interface SessionManager {
-  createSession(
-    taskDescription: string,
-    config?: Partial<SessionConfig>
-  ): Promise<RefinementSession>;
-  loadSession(sessionId: string): Promise<RefinementSession | null>;
-  getActiveSession(): Promise<RefinementSession | null>; // Find session with status 'initializing' or 'iterating'
-  updateSessionStatus(sessionId: string, status: SessionStatus): Promise<void>;
-  addIteration(sessionId: string, iteration: IterationResult): Promise<void>;
-}
-```
+**Session resumption**: When `finslipa_start` detects an active session, prompt user to resume or force new. Use `forceNew: true` to override.
+
+**Merge strategy**: Winner-takes-all (default) merges the selected iteration's branch. Cherry-pick mode (future) allows selecting specific commits.
 
 ### 4.2 Directive Writer
 
-Generates `directive.md` that grounds the LLM.
+Generates `directive.md` that grounds the LLM with:
 
-```typescript
-interface DirectiveWriter {
-  write(context: DirectiveContext): Promise<void>;
-}
+- Current status and score
+- Reference documentation (auto-detected spec files)
+- Required next actions
+- Previous iteration summaries
 
-interface DirectiveContext {
-  session: RefinementSession;
-  latestIteration: IterationResult;
-  nextActions: string[];
-  history?: IterationSummary[]; // Previous iterations to prevent repeating mistakes
-  specHints?: string[]; // Auto-detected spec file paths
-}
+**Directive template**:
 
-// Example Directive Content:
-// # Finsliparn Directive
-// **Status**: ITERATING
-// **Score**: 60% (3/5 tests passing)
-//
-// ## Reference Documentation
-// Review these files for requirements and specifications:
-// - `docs/spec-cc.md`
-// - `ROADMAP.md`
-//
-// ## Required Actions
-// 1. Read .finsliparn/sessions/{id}/feedback/latest.md
-// 2. Fix the failing tests
-// 3. Call finslipa_check
+```markdown
+# Finsliparn Directive
+**Status**: ITERATING | **Score**: 60% (3/5 tests)
+## Reference: docs/spec-cc.md, ROADMAP.md
+## Actions: 1. Read feedback/latest.md 2. Fix failing tests 3. Call finslipa_check
 ```
 
-### 4.2.1 Spec File Auto-Detection
-
-Case-insensitive filename matching in `.` and `docs/`:
-
-**Recognized base names**: `spec`, `roadmap`, `architecture`, `design`, `specification`
-
-**Matching rules**:
-
-- Exact: `spec.md`, `ROADMAP.md`
-- Prefixed: `spec-cc.md`, `design-v2.md`
-
-Detected files are included as context hints, not validation requirements.
+**Spec file auto-detection**: Case-insensitive matching in `.` and `docs/` for: `spec`, `roadmap`, `architecture`, `design`, `specification` (exact or prefixed like `spec-cc.md`).
 
 ### 4.3 Iteration Counting
 
-Iterations always increment regardless of code changes. This ensures:
-
-1. Seed diversity formula produces predictable, unique seeds
-2. Experts run full `maxIterations` attempts
-3. Early termination doesn't break cross-expert seed uniqueness
-
-Do NOT require `filesChanged > 0` to count an iteration.
+Iterations always increment regardless of code changes. Do NOT require `filesChanged > 0` to count an iteration. This ensures seed diversity formula produces predictable, unique seeds across experts.
 
 ### 4.4 Diff Analyzer & Scoring
 
-Prevents "brute force" solutions that pass tests but degrade code quality.
+**DiffAnalysis** captures: filesChanged, insertions, deletions, complexity (low/medium/high), complexityScore.
 
-```typescript
-interface DiffAnalysis {
-  filesChanged: string[];
-  insertions: number;
-  deletions: number;
-  complexity: "low" | "medium" | "high";
-  complexityScore: number; // 0-100 heuristic for penalty calculation
-}
-
-interface ScoreWeights {
-  testPass: number; // Weight for passing tests (default: 1.0)
-  complexityPenalty: number; // Penalty for excessive changes (default: 0.1)
-}
-```
-
-**Diff fallback order** (when `HEAD~1` fails):
-
-1. `HEAD~1` → `HEAD` → `--staged` → `""` (working dir)
+**Diff fallback order**: `HEAD~1` → `HEAD` → `--staged` → working dir
 
 **Complexity thresholds**:
 
-- `low`: ≤50 lines
-- `medium`: ≤150 lines
-- `high`: >150 lines
-- Spread penalty: +10 per file beyond 5
+- low: ≤50 lines
+- medium: ≤150 lines
+- high: >150 lines (+10 penalty per file beyond 5)
+
+**Scoring**:
+
+- `hardScore`: passed/total tests (binary per test)
+- `softScore`: Partial credit for near-correct results (e.g., assertion similarity)
+- `finalScore`: `hardScore - complexityPenalty`
 
 ### 4.5 Iteration Result
 
-```typescript
-interface IterationResult {
-  iteration: number;
-  expertId?: string; // For parallel experts (MVP)
-  startedAt: string;
-  completedAt: string;
-  status: "success" | "partial" | "failed";
+**IterationResult** captures:
 
-  // Test results (source of truth)
-  testResults: TestResults;
-  score: number; // 0.0 - 1.0
+- iteration number, expertId (parallel mode)
+- timestamps, status (success/partial/failed)
+- testResults: framework, passed, failed, skipped, total, duration, failures[]
+- diff, filesModified, statistics (linesAdded, linesRemoved, complexityScore)
+- generatedFeedback, worktreePath, commitSha
 
-  // Change tracking
-  diff: string; // Git diff of changes
-  filesModified: string[];
-  statistics: {
-    linesAdded: number;
-    linesRemoved: number;
-    complexityScore: number; // New field
-  };
-
-  // Feedback for next iteration
-  generatedFeedback?: string;
-
-  // Metadata
-  worktreePath: string;
-  commitSha?: string;
-}
-
-interface TestResults {
-  framework: string; // 'bun', 'vitest', 'jest', 'pytest', etc.
-  passed: number;
-  failed: number;
-  skipped: number;
-  total: number;
-  duration: number; // ms
-  failures: TestFailure[];
-}
-
-interface TestFailure {
-  name: string;
-  file: string;
-  line?: number;
-  message: string;
-  expected?: string;
-  actual?: string;
-  stack?: string;
-}
-```
+**TestFailure** includes: name, file, line, message, expected, actual, stack.
 
 ### 4.6 Feedback Generator
 
-Transforms test failures into actionable feedback.
+Transforms test failures into actionable feedback with:
 
-```typescript
-interface FeedbackGenerator {
-  generate(
-    testResults: TestResults,
-    previousAttempts: IterationResult[],
-    problem: ProblemDefinition
-  ): Promise<string>;
-}
-```
+- Score summary
+- Per-failure analysis with suggested fixes
+- Patterns from previous attempts
+- Original constraints reminder
+- Specific next steps
 
-**Feedback template**:
+**Feedback template** (`feedback/{N}.md`):
 
 ```markdown
-## Iteration {n} Feedback
-
-### Score: {score}% ({passed}/{total} tests passing)
-
-### Failed Tests Analysis
-
-#### Test: {test_name}
-
-- **File**: {file}:{line}
-- **Expected**: {expected}
-- **Actual**: {actual}
-- **Suggested Fix**: {llm_generated_suggestion}
-
-### Patterns from Previous Attempts
-
-- Iteration 1: {summary}
-- Iteration 2: {summary}
-
-### Constraints Reminder
-
-{original_constraints}
-
-### Next Steps
-
-1. {specific_action_1}
-2. {specific_action_2}
+## Iteration {N} Feedback
+### Score: {score}% ({passed}/{total} tests)
+### Failed: {test_name}
+- File: {file}:{line}
+- Expected: {expected}
+- Actual: {actual}
+### Previous patterns: Iteration 1 tried X, Iteration 2 tried Y
+### Next: 1. {action_1} 2. {action_2}
 ```
 
 ---
 
 ## 5. MCP Tools
 
-### 5.1 Tool Definitions
+| Tool | Inputs | Purpose |
+|------|--------|---------|
+| `finslipa_start` | task, maxIterations?, forceNew?, mergeThreshold?, expertCount? | Create session |
+| `finslipa_check` | sessionId | Run tests, score, update directive |
+| `finslipa_vote` | sessionId, strategy? (highest_score/minimal_diff/balanced) | Select best iteration |
+| `finslipa_status` | sessionId | Read directive and session state |
+| `finslipa_merge` | sessionId, iteration? | Merge winning iteration |
+| `finslipa_cancel` | sessionId | Cleanup worktrees and branches |
+| `finslipa_clean` | sessionId?, status? | Delete finished session directories |
 
-```typescript
-const tools = [
-  {
-    name: "finslipa_start",
-    description: "Start a new refinement session for a coding task",
-    inputSchema: {
-      type: "object",
-      properties: {
-        taskDescription: { type: "string", description: "Task description" },
-        maxIterations: { type: "number", default: 5 },
-        forceNew: {
-          type: "boolean",
-          default: false,
-          description: "Force new session even if active session exists",
-        },
-        mergeThreshold: {
-          type: "number",
-          description: "Minimum score required to merge (undefined = disabled)",
-        },
-      },
-      required: ["taskDescription"],
-    },
-  },
+**Response format**: All tools return `{ success, message, data?, nextSteps?, sessionContext? }`.
 
-  {
-    name: "finslipa_check",
-    description: "Submit current changes, run tests, and update the directive",
-    inputSchema: {
-      type: "object",
-      properties: {
-        sessionId: { type: "string" },
-      },
-      required: ["sessionId"],
-    },
-  },
+### 5.1 Voting Algorithm
 
-  {
-    name: "finslipa_vote",
-    description: "Compare all iterations and select the best solution",
-    inputSchema: {
-      type: "object",
-      properties: {
-        sessionId: { type: "string" },
-        strategy: {
-          type: "string",
-          enum: ["highest_score", "minimal_diff", "balanced"],
-        },
-      },
-      required: ["sessionId"],
-    },
-  },
+When `finslipa_vote` is called (especially in parallel mode):
 
-  {
-    name: "finslipa_status",
-    description: "Read the current directive and session status",
-    inputSchema: {
-      type: "object",
-      properties: {
-        sessionId: { type: "string" },
-      },
-      required: ["sessionId"],
-    },
-  },
+1. **Bucket by output**: Group iterations producing identical test outputs
+2. **Separate passers vs failures**: Passers = all tests pass; failures = any test fails
+3. **Rank passers**: Sort by vote count (bucket size) descending; diversity-first (one per bucket)
+4. **Rank failures**: Sort by softScore descending within bucket, then by bucket vote count
+5. **Final order**: [diverse passers] → [diverse failures] → [remaining passers] → [remaining failures]
 
-  {
-    name: "finslipa_complete",
-    description: "Mark session complete and merge winning solution",
-    inputSchema: {
-      type: "object",
-      properties: {
-        sessionId: { type: "string" },
-        iteration: {
-          type: "number",
-          description: "Iteration to merge (optional, defaults to winner)",
-        },
-      },
-      required: ["sessionId"],
-    },
-  },
+Strategies:
 
-  {
-    name: "finslipa_cancel",
-    description: "Cancel session and cleanup worktrees",
-    inputSchema: {
-      type: "object",
-      properties: {
-        sessionId: { type: "string" },
-      },
-      required: ["sessionId"],
-    },
-  },
-];
-```
-
-### 5.2 Tool Response Format
-
-```typescript
-interface ToolResponse {
-  success: boolean;
-  message: string;
-  data?: {
-    sessionId?: string;
-    iteration?: number;
-    score?: number;
-    status?: SessionStatus;
-    testResults?: TestResults;
-    feedback?: string;
-    diff?: string;
-  };
-  nextSteps?: string[]; // Explicit guidance for the LLM
-  sessionContext?: {
-    sessionId: string;
-    currentIteration: number;
-    totalIterations: number;
-    bestScore: number;
-    status: SessionStatus;
-  };
-}
-```
+- `highest_score`: Pick iteration with best hardScore, softScore as tiebreak
+- `minimal_diff`: Among equal scores, prefer smallest diff
+- `balanced`: Weighted combination of score and diff size
 
 ---
 
 ## 6. Plugin Structure
 
-### 6.1 Manifest (manifest.json)
+### 6.1 Manifest
 
-```json
-{
-  "name": "finsliparn",
-  "version": "1.0.0",
-  "description": "Iterative refinement and test-driven validation for coding tasks",
-  "author": "Your Name",
-  "license": "MIT",
+Plugin provides:
 
-  "commands": [
-    {
-      "name": "finslipa",
-      "description": "Start or manage a refinement session",
-      "handler": "commands/finslipa.ts"
-    },
-    {
-      "name": "finslipa:check",
-      "description": "Manually trigger a check/iteration",
-      "handler": "commands/check.ts"
-    },
-    {
-      "name": "finslipa:status",
-      "description": "Show current refinement status",
-      "handler": "commands/status.ts"
-    },
-    {
-      "name": "finslipa:complete",
-      "description": "Complete session and merge solution",
-      "handler": "commands/complete.ts"
-    }
-  ],
+- **Commands**: `/finslipa`, `/finslipa:check`, `/finslipa:status`, `/finslipa:complete`
+- **Hooks**: `PostToolUse` for automatic feedback injection
+- **MCP Server**: `bun run ${CLAUDE_PLUGIN_ROOT}/mcp/server.ts`
+- **Agents**: `finslipa-expert` for code refinement
 
-  "hooks": {
-    "PostToolUse": "hooks/post-tool-use.ts"
-  },
+### 6.2 PostToolUse Hook
 
-  "mcpServers": [
-    {
-      "name": "finsliparn",
-      "command": "bun",
-      "args": ["run", "${CLAUDE_PLUGIN_ROOT}/mcp/server.ts"]
-    }
-  ],
+Triggers on Edit/Write tools when session active:
 
-  "agents": [
-    {
-      "name": "finslipa-expert",
-      "description": "Specialized agent for code refinement",
-      "prompt": "You are a code refinement expert..."
-    }
-  ]
-}
-```
-
-### 6.2 Command Handlers
-
-```typescript
-// commands/finslipa.ts
-import type { CommandHandler } from "@claude/plugin-sdk";
-
-export const handler: CommandHandler = async (args, context) => {
-  const { sessionManager } = await import("../core/session-manager");
-
-  if (!args.length) {
-    // Interactive mode: prompt for task description
-    return {
-      type: "prompt",
-      message: "What coding task would you like to refine?",
-    };
-  }
-
-  const description = args.join(" ");
-  const session = await sessionManager.create({
-    description,
-    targetFiles: await detectTargetFiles(context.cwd),
-    testCommand: await detectTestCommand(context.cwd),
-  });
-
-  return {
-    type: "message",
-    content:
-      `Started refinement session: ${session.id}\n\n` +
-      `Target files: ${session.config.targetFiles.join(", ")}\n` +
-      `Test command: ${session.config.testCommand}\n\n` +
-      `Begin implementing the solution. When ready, I'll run tests and provide feedback.`,
-  };
-};
-```
-
-### 6.3 Hook: Post-Tool Feedback Injection
-
-Hook triggers on Edit/Write tools; filesystem maintains state.
-
-```typescript
-// hooks/post-tool-use.ts
-import type { PostToolUseHook } from "@claude/plugin-sdk";
-
-export const hook: PostToolUseHook = async (event, context) => {
-  const { sessionManager } = await import("../core/session-manager");
-
-  // Only trigger after Edit/Write tools when a session is active
-  if (!["Edit", "Write"].includes(event.toolName)) return;
-
-  const activeSession = await sessionManager.getActive(context.cwd);
-  if (!activeSession) return;
-
-  // Check if modified file is in target files
-  const modifiedFile = extractFilePath(event.toolInput);
-  if (!activeSession.config.targetFiles.includes(modifiedFile)) return;
-
-  // 1. Trigger the check (Runs tests, updates directive.md, generates feedback)
-  // This is the same logic as calling `finslipa_check`
-  const iteration = await sessionManager.runCheck(activeSession.id);
-
-  // 2. Read the result to decide what to inject
-  if (iteration.score >= activeSession.config.targetScore) {
-    return {
-      decision: "inject",
-      content:
-        `\n\n✅ **All tests passing!** Score: ${(iteration.score * 100).toFixed(
-          1
-        )}%\n\n` +
-        `I have updated \`.finsliparn/directive.md\` to status COMPLETE.\n` +
-        `Run \`/finslipa:complete\` to merge this solution.`,
-    };
-  }
-
-  return {
-    decision: "inject",
-    content:
-      `\n\n**Iteration ${iteration.iteration} Results**\n` +
-      `Score: ${(iteration.score * 100).toFixed(1)}% (${
-        iteration.testResults.passed
-      }/${iteration.testResults.total} tests)\n\n` +
-      `I have updated the directive. See \`.finsliparn/sessions/${activeSession.id}/feedback/latest.md\` for details.\n\n` +
-      `**Next Step**: Read the feedback file and address the failing tests.`,
-  };
-};
-```
+1. Check if modified file is in target files
+2. Run `sessionManager.runCheck()` (tests + directive update)
+3. Inject result message:
+   - If score ≥ targetScore: "✅ All tests passing! Run `/finslipa:complete`"
+   - Otherwise: "Iteration N: X% score. See feedback/latest.md"
 
 ---
 
-## 7. Core Engine Implementation
+## 7. Core Engine
 
-### 7.1 Test Runner Abstraction
+### 7.1 Test Runner
 
-```typescript
-// core/test-runner.ts
-interface TestRunner {
-  name: string;
-  detect(cwd: string): Promise<boolean>;
-  run(cwd: string, options: TestRunOptions): Promise<TestResults>;
-  parseOutput(stdout: string, stderr: string): TestResults;
-}
+**Detection order**: Bun → Vitest → Jest → Pytest
 
-interface TestRunOptions {
-  timeout: number;
-  env?: Record<string, string>;
-  testFiles?: string[];
-}
-
-// Bun test only supports 'junit' (XML) and 'dots' reporters, not JSON.
-// Parse human-readable output with regex + fallback strategies.
-class BunTestRunner implements TestRunner {
-  name = "bun";
-
-  async detect(cwd: string): Promise<boolean> {
-    // Check for bun.lock or test files
-    const bunLock = existsSync(join(cwd, "bun.lock"));
-    return bunLock;
-  }
-
-  async run(cwd: string, options: TestRunOptions): Promise<TestResults> {
-    const proc = Bun.spawn(["bun", "test"], {
-      cwd,
-      timeout: options.timeout,
-      env: { ...process.env, ...options.env },
-    });
-
-    const stdout = await new Response(proc.stdout).text();
-    const stderr = await new Response(proc.stderr).text();
-    return this.parseOutput(stdout, stderr);
-  }
-
-  parseOutput(stdout: string, stderr: string): TestResults {
-    // Bun writes test results to stderr in human-readable format
-    // Parse using regex patterns with fallback strategies
-    const combined = `${stdout}\n${stderr}`;
-
-    // Line-by-line counting (fallback)
-    let lineCount = { passed: 0, failed: 0 };
-    for (const line of combined.split("\n")) {
-      if (line.includes("(pass)") || line.includes("✓")) lineCount.passed++;
-      if (line.includes("(fail)") || line.includes("✗")) lineCount.failed++;
-    }
-
-    // Summary parsing: "15 pass\n 0 fail"
-    const passMatch = combined.match(/^\s*(\d+)\s+pass(?:ed)?(?:\s|$)/m);
-    const failMatch = combined.match(/^\s*(\d+)\s+fail(?:ed)?(?:\s|$)/m);
-
-    let passed = passMatch ? parseInt(passMatch[1], 10) : 0;
-    let failed = failMatch ? parseInt(failMatch[1], 10) : 0;
-
-    // Use line count as fallback if summary parsing fails
-    if (passed === 0 && failed === 0 && (lineCount.passed > 0 || lineCount.failed > 0)) {
-      passed = lineCount.passed;
-      failed = lineCount.failed;
-    }
-
-    // Duration from "[38.00ms]"
-    const durationMatch = combined.match(/\[(\d+(?:\.\d+)?)\s*ms\]/);
-    const duration = durationMatch ? parseFloat(durationMatch[1]) : 0;
-
-    return {
-      framework: "bun",
-      passed,
-      failed,
-      skipped: 0,
-      total: passed + failed,
-      duration,
-      failures: this.parseFailures(combined),
-    };
-  }
-
-  private parseFailures(output: string): TestFailure[] {
-    // Parse failure details from output
-    // ... (extracts test name, file, line, expected/actual values)
-  }
-}
-
-// Factory for test runner detection
-export async function detectTestRunner(cwd: string): Promise<TestRunner> {
-  const runners = [
-    new BunTestRunner(),
-    new VitestRunner(),
-    new JestRunner(),
-    new PytestRunner(),
-  ];
-
-  for (const runner of runners) {
-    if (await runner.detect(cwd)) return runner;
-  }
-
-  throw new Error("No supported test runner detected");
-}
-```
+**Bun parser**: Extracts pass/fail counts from stderr using regex. Summary format: `N pass\nM fail`. Fallback: line-by-line counting of `✓`/`✗` markers. Duration from `[N.NNms]`.
 
 ### 7.2 Worktree Manager
 
-Iteration worktrees must base on previous iteration's branch, not `main`. Without this, each iteration loses previous work.
+**Critical**: Iteration worktrees must base on previous iteration's branch, not `main`.
 
-```typescript
-// core/worktree-manager.ts
-import { simpleGit, SimpleGit } from "simple-git";
+**Operations**:
 
-interface WorktreeInfo {
-  path: string;
-  branch: string;
-  commitSha: string;
-}
+- `create(sessionId, iterationId, baseBranch)`: Create worktree with branch `finsliparn/{sessionId}/{iterationId}`
+- `getDiff(path)`: Get changes from HEAD
+- `commit(path, message)`: Stage and commit all changes
+- `merge(path, targetBranch)`: Merge worktree branch to target
+- `cleanup(sessionId)`: Remove all session worktrees and branches
 
-class WorktreeManager {
-  private git: SimpleGit;
-  private baseDir: string;
+### 7.3 Score Calculator
 
-  constructor(projectPath: string) {
-    this.git = simpleGit(projectPath);
-    this.baseDir = `${projectPath}/.finsliparn/worktrees`;
-  }
-
-  async create(
-    sessionId: string,
-    iterationId: string,
-    baseBranch: string = "main"  // CRITICAL: Pass previous iteration's branch for iteration > 1
-  ): Promise<WorktreeInfo> {
-    const branchName = `finsliparn/${sessionId}/${iterationId}`;
-    const worktreePath = `${this.baseDir}/${sessionId}-${iterationId}`;
-
-    // Create worktree from the specified base branch
-    // - Iteration 1: baseBranch = "main"
-    // - Iteration N: baseBranch = "finsliparn/{sessionId}/iteration-{N-1}"
-    await this.git.raw(["worktree", "add", "-B", branchName, worktreePath, baseBranch]);
-
-    const sha = await this.git.revparse(["HEAD"]);
-
-    return {
-      path: worktreePath,
-      branch: branchName,
-      commitSha: sha.trim(),
-    };
-  }
-
-  async getDiff(worktreePath: string): Promise<string> {
-    const worktreeGit = simpleGit(worktreePath);
-    return worktreeGit.diff(["HEAD"]);
-  }
-
-  async commit(worktreePath: string, message: string): Promise<string> {
-    const worktreeGit = simpleGit(worktreePath);
-    await worktreeGit.add(".");
-    const result = await worktreeGit.commit(message);
-    return result.commit;
-  }
-
-  async merge(
-    worktreePath: string,
-    targetBranch: string = "main"
-  ): Promise<void> {
-    const worktreeGit = simpleGit(worktreePath);
-    const branch = (await worktreeGit.branch()).current;
-
-    // Switch to main repo and merge
-    await this.git.checkout(targetBranch);
-    await this.git.merge([branch]);
-  }
-
-  async cleanup(sessionId: string): Promise<void> {
-    const worktrees = await this.git.raw(["worktree", "list", "--porcelain"]);
-    const sessionWorktrees = worktrees
-      .split("\n\n")
-      .filter((w) => w.includes(`finsliparn/${sessionId}`));
-
-    for (const wt of sessionWorktrees) {
-      const pathMatch = wt.match(/worktree (.+)/);
-      if (pathMatch) {
-        await this.git.raw(["worktree", "remove", "--force", pathMatch[1]]);
-      }
-    }
-
-    // Prune branches
-    const branches = await this.git.branch();
-    for (const branch of branches.all) {
-      if (branch.startsWith(`finsliparn/${sessionId}`)) {
-        await this.git.branch(["-D", branch]);
-      }
-    }
-  }
-}
 ```
-
-### 7.3 Score Calculator & Diff Analyzer
-
-```typescript
-// core/scoring.ts
-interface ScoreWeights {
-  testPass: number; // Weight for passing tests
-  coverageBonus: number; // Bonus for high coverage
-  complexityPenalty: number; // Penalty for excessive changes
-}
-
-const DEFAULT_WEIGHTS: ScoreWeights = {
-  testPass: 1.0,
-  coverageBonus: 0.1,
-  complexityPenalty: 0.05,
-};
-
-function calculateScore(
-  testResults: TestResults,
-  diffStats?: { linesAdded: number; linesRemoved: number; complexity: number },
-  weights: ScoreWeights = DEFAULT_WEIGHTS
-): number {
-  // Base score: percentage of passing tests
-  const baseScore =
-    testResults.total > 0 ? testResults.passed / testResults.total : 0;
-
-  // Complexity penalty for excessive changes
-  let complexityPenalty = 0;
-  if (diffStats) {
-    // Penalize massive diffs or high complexity
-    const totalChanges = diffStats.linesAdded + diffStats.linesRemoved;
-    if (totalChanges > 500) {
-      complexityPenalty += 0.05;
-    }
-    if (diffStats.complexity > 10) {
-      complexityPenalty += 0.05;
-    }
-  }
-
-  const finalScore = Math.max(0, Math.min(1, baseScore - complexityPenalty));
-  return Number(finalScore.toFixed(4));
-}
+score = max(0, min(1, (passed/total) - complexityPenalty))
+complexityPenalty = 0.05 if totalChanges > 500 + 0.05 if complexity > 10
 ```
 
 ---
 
-## 8. PoC vs MVP Features
+## 8. Feature Roadmap
 
-### 8.1 PoC (Single-Expert Sequential)
-
-| Feature                 | Status | Description                           |
-| ----------------------- | ------ | ------------------------------------- |
-| Session management      | ✅      | Create, track, complete sessions      |
-| Single worktree         | ✅      | One worktree per iteration            |
-| Test-driven feedback    | ✅      | Parse test results, generate feedback |
-| Score tracking          | ✅      | Track improvement across iterations   |
-| **Directive System**    | ✅      | `directive.md` as control plane       |
-| **Complexity Analysis** | ✅      | Basic diff stats and risk scoring     |
-| Plugin commands         | ✅      | /finslipa, /finslipa:status, etc.     |
-
-### 8.2 MVP (Multi-Expert Parallel)
-
-| Feature             | Status | Description                                          |
-| ------------------- | ------ | ---------------------------------------------------- |
-| Parallel worktrees  | 🔜     | Multiple experts work simultaneously                 |
-| **Advanced Voting** | 🔜     | Compare N parallel solutions (Foundation is in Core) |
-| Staggered launches  | 🔜     | Rate-limit aware expert spawning                     |
-| Consensus detection | 🔜     | Identify when experts converge                       |
-| Dashboard UI        | 🔜     | Real-time progress visualization                     |
-
-### 8.3 Future Considerations
-
-| Feature               | Priority | Description                              |
-| --------------------- | -------- | ---------------------------------------- |
-| Coverage integration  | Medium   | Track test coverage as additional signal |
-| Static analysis       | Medium   | Integrate ESLint/TypeScript errors       |
-| Semantic diff         | Low      | Understand code changes semantically     |
-| Learning from history | Low      | Improve feedback based on past sessions  |
+| Feature | Phase | Status |
+|---------|-------|--------|
+| Session management | PoC | ✅ |
+| Single worktree | PoC | ✅ |
+| Test-driven feedback | PoC | ✅ |
+| Score tracking | PoC | ✅ |
+| Directive system | PoC | ✅ |
+| Complexity analysis | PoC | ✅ |
+| Plugin commands | PoC | ✅ |
+| Parallel worktrees | MVP | 🔜 |
+| Advanced voting | MVP | 🔜 |
+| Staggered launches | MVP | 🔜 |
+| Consensus detection | MVP | 🔜 |
+| Dashboard UI | MVP | 🔜 |
+| Coverage integration | Future | — |
+| Static analysis | Future | — |
+| Semantic diff | Future | — |
 
 ---
 
 ## 9. Configuration
 
-### 9.1 Default Configuration (.finsliparn/config.toml)
+See `.finsliparn/config.toml` for defaults.
 
-```toml
-[session]
-max_iterations = 10
-target_score = 1.0
-timeout_ms = 60000
-shuffle_examples = true
+**Key settings**:
 
-[test]
-command = "bun test"
-coverage = false
+- `session.shuffle_examples`: Randomize feedback order for diversity
+- `session.merge_threshold`: Minimum score to allow merge (undefined = disabled)
+- `experts.count`: Number of parallel experts (MVP)
 
-[worktree]
-cleanup_on_complete = true
-cleanup_on_cancel = true
-
-[feedback]
-include_previous_attempts = true
-max_previous_attempts = 3
-include_stack_traces = true
-
-[experts]
-# MVP settings
-count = 1
-parallel = false
-stagger_delay_ms = 2000
-
-[dashboard]
-enabled = false
-port = 5050
-```
-
-### 9.2 Environment Variables
-
-| Variable                    | Description                     | Default       |
-| --------------------------- | ------------------------------- | ------------- |
-| `FINSLIPARN_HOME`           | Override config/state directory | `.finsliparn` |
-| `FINSLIPARN_TEST_COMMAND`   | Override test command           | (auto-detect) |
-| `FINSLIPARN_MAX_ITERATIONS` | Override max iterations         | 10            |
-| `FINSLIPARN_DASHBOARD_PORT` | Dashboard port                  | 5050          |
+**Environment variables**: `FINSLIPARN_HOME`, `FINSLIPARN_TEST_COMMAND`, `FINSLIPARN_MAX_ITERATIONS`, `FINSLIPARN_DASHBOARD_PORT`
 
 ---
 
 ## 10. Error Handling
 
-### 10.1 Error Categories
+**Error codes**: SESSION_NOT_FOUND, SESSION_ALREADY_EXISTS, NO_TEST_RUNNER, TEST_TIMEOUT, WORKTREE_FAILED, GIT_ERROR, MERGE_CONFLICT, CONFIG_INVALID
 
-```typescript
-class FinsliparnError extends Error {
-  constructor(
-    message: string,
-    public code: ErrorCode,
-    public recoverable: boolean = true
-  ) {
-    super(message);
-  }
-}
+**Recovery**:
 
-type ErrorCode =
-  | "SESSION_NOT_FOUND"
-  | "SESSION_ALREADY_EXISTS"
-  | "NO_TEST_RUNNER"
-  | "TEST_TIMEOUT"
-  | "WORKTREE_FAILED"
-  | "GIT_ERROR"
-  | "MERGE_CONFLICT"
-  | "CONFIG_INVALID";
-```
-
-### 10.2 Recovery Strategies
-
-| Error             | Strategy                                     |
-| ----------------- | -------------------------------------------- |
-| `TEST_TIMEOUT`    | Retry with increased timeout, or skip        |
-| `WORKTREE_FAILED` | Cleanup and retry, or fall back to branches  |
-| `MERGE_CONFLICT`  | Present to user for manual resolution        |
-| `NO_TEST_RUNNER`  | Prompt user to configure test command        |
+- TEST_TIMEOUT: Retry with increased timeout
+- WORKTREE_FAILED: Cleanup and retry
+- MERGE_CONFLICT: Present to user for manual resolution
 
 ---
 
 ## 11. Security
 
-1. **Worktree Isolation**: Each iteration in isolated worktree
-2. **No External Network**: Tests run locally
-3. **Sandboxed Execution**: Respect Claude Code's permission model
-4. **Config Validation**: Validate user-provided configuration
-5. **Path Sanitization**: Prevent path traversal
+1. Worktree isolation per iteration
+2. Local-only test execution
+3. Respects Claude Code permission model
+4. Config and path validation
 
 ---
 
-## 12. Testing Strategy
+## 12. Testing
 
-### 12.1 Unit Tests
+See `tests/` directory for unit and integration tests.
 
-```typescript
-// tests/scoring.test.ts
-import { describe, test, expect } from "bun:test";
-import { calculateScore } from "../core/scoring";
-
-describe("Score Calculator", () => {
-  test("perfect score for all passing tests", () => {
-    const result = calculateScore({
-      framework: "bun",
-      passed: 10,
-      failed: 0,
-      skipped: 0,
-      total: 10,
-      duration: 100,
-      failures: [],
-    });
-    expect(result).toBe(1.0);
-  });
-
-  test("partial score for mixed results", () => {
-    const result = calculateScore({
-      framework: "bun",
-      passed: 7,
-      failed: 3,
-      skipped: 0,
-      total: 10,
-      duration: 100,
-      failures: [],
-    });
-    expect(result).toBe(0.7);
-  });
-});
-```
-
-### 12.2 Integration Tests
-
-```typescript
-// tests/integration/session.test.ts
-import { describe, test, expect, beforeEach, afterEach } from "bun:test";
-import { SessionManager } from "../core/session-manager";
-
-describe("Session Lifecycle", () => {
-  let manager: SessionManager;
-  let testDir: string;
-
-  beforeEach(async () => {
-    testDir = await createTempProject();
-    manager = new SessionManager(testDir);
-  });
-
-  afterEach(async () => {
-    await cleanup(testDir);
-  });
-
-  test("creates session with worktree", async () => {
-    const session = await manager.create({
-      description: "Test task",
-      targetFiles: ["src/index.ts"],
-      testCommand: "bun test",
-    });
-
-    expect(session.id).toBeDefined();
-    expect(session.status).toBe("running");
-    expect(
-      await Bun.file(
-        `${testDir}/.finsliparn/sessions/${session.id}/state.json`
-      ).exists()
-    ).toBe(true);
-  });
-});
-```
+**Key test areas**: Score calculation, session lifecycle, worktree operations.
 
 ---
 
 ## 13. Parallel Experts Architecture
 
-Architecture for running multiple LLM experts in parallel with seed diversity.
-
 ### 13.1 Design Decisions
 
-| Decision                    | Choice                                                    | Rationale                                 |
-| --------------------------- | --------------------------------------------------------- | ----------------------------------------- |
-| Single-expert directive     | Keep root `.finsliparn/directive.md`                      | Backward compatibility                    |
-| Parallel directive location | `.finsliparn/sessions/{id}/directives/expert-{N}.md`      | Session-scoped isolation                  |
-| Worktree structure          | Nested `finsliparn/{sessionId}/expert-{E}/iteration-{N}`  | Clean hierarchy, easy cleanup             |
-| Expert ID detection         | Auto-detect from worktree path                            | Ergonomic, no explicit parameter needed   |
-| Seed formula                | `baseSeed + expertId * maxIterations`                     | Per Poetiq, ensures diverse exploration   |
-| Race termination            | All experts run to completion                             | Maximize solution diversity before voting |
-| Expert failure              | Continue other experts                                    | Resilience, return best available result  |
+| Decision | Choice | Rationale |
+|----------|--------|-----------|
+| Single-expert directive | Root `.finsliparn/directive.md` | Backward compatibility |
+| Parallel directive location | `sessions/{id}/directives/expert-{N}.md` | Session-scoped isolation |
+| Worktree structure | `finsliparn/{sessionId}/expert-{E}/iteration-{N}` | Clean hierarchy |
+| Expert ID detection | Auto-detect from worktree path | Ergonomic |
+| Seed formula | `baseSeed + expertId * maxIterations` | Ensures diverse exploration |
+| Race termination | All experts run to completion | Maximize diversity before voting |
+| Expert failure | Continue other experts | Resilience |
 
 ### 13.2 Directory Structure (Parallel Mode)
 
 ```
 .finsliparn/
-├── directive.md                          # Single-expert mode (unchanged)
 ├── sessions/{sessionId}/
-│   ├── state.json                        # mode: "single" | "parallel"
-│   ├── directive.md                      # Single-expert (backward compat)
-│   ├── race.md                           # Parallel: scoreboard (generated at race end)
-│   ├── directives/                       # Parallel only
+│   ├── state.json              # mode: "single" | "parallel"
+│   ├── directive.md            # Single-expert (backward compat)
+│   ├── race.md                 # Parallel: scoreboard
+│   ├── directives/
 │   │   ├── expert-1.md
 │   │   └── expert-2.md
 │   └── iterations/
-│       ├── 1.json                        # Single-expert iterations
-│       └── expert-{E}-{N}.json           # Parallel: expert-scoped iterations
+│       └── expert-{E}-{N}.json
 ├── worktrees/finsliparn/{sessionId}/
-│   ├── iteration-{N}                     # Single-expert
-│   └── expert-{E}/iteration-{N}          # Parallel
+│   └── expert-{E}/iteration-{N}
 ```
 
 ### 13.3 Type Extensions
 
-```typescript
-type RefinementSession = {
-  // ... existing fields ...
-  mode: "single" | "parallel";
-  expertCount?: number;
-  experts?: ExpertState[];
-};
+**RefinementSession** adds:
 
-type ExpertState = {
-  id: number;
-  seed: number;
-  currentIteration: number;
-  bestIteration?: number;
-  bestScore?: number;
-};
-```
+- `mode`: "single" | "parallel"
+- `expertCount`: number of experts
+- `experts`: ExpertState[] with id, seed, currentIteration, bestIteration, bestScore
 
 ### 13.4 Seed Diversity
 
-Each expert gets a deterministic unique seed:
-
-```typescript
-function calculateExpertSeed(baseSeed: number, expertId: number, maxIterations: number): number {
-  return baseSeed + expertId * maxIterations;
-}
+```
+expertSeed = baseSeed + expertId * maxIterations
 ```
 
 Guarantees unique seeds per expert-iteration pair.
 
 ### 13.5 Expert ID Auto-Detection
 
-Experts detect identity from worktree path:
-
-```typescript
-function detectExpertFromPath(worktreePath: string): { expertId: number; iteration: number } | null {
-  // Pattern: .finsliparn/worktrees/finsliparn/{sessionId}/expert-{E}/iteration-{N}
-  const match = worktreePath.match(/expert-(\d+)\/iteration-(\d+)$/);
-  if (!match) return null;
-  return {
-    expertId: parseInt(match[1], 10),
-    iteration: parseInt(match[2], 10),
-  };
-}
-```
+Experts detect identity from worktree path pattern: `expert-{E}/iteration-{N}`.
 
 ### 13.6 Orchestration Flow
 
@@ -1186,72 +407,32 @@ sequenceDiagram
     par Parallel Expert Execution
         Orchestrator->>E1: Task agent (reads expert-1.md)
         E1->>E1: Implement → Check → Iterate
-        E1-->>Orchestrator: Expert 1 complete (best score)
+        E1-->>Orchestrator: Expert 1 complete
     and
         Orchestrator->>E2: Task agent (reads expert-2.md)
         E2->>E2: Implement → Check → Iterate
-        E2-->>Orchestrator: Expert 2 complete (best score)
+        E2-->>Orchestrator: Expert 2 complete
     end
 
     Orchestrator->>Vote: finslipa_vote(session, strategy)
     Vote-->>Orchestrator: Winner selected
     Orchestrator->>MCP: finslipa_merge(session)
-    MCP-->>Orchestrator: Solution merged
     Orchestrator-->>User: Done!
 ```
 
-### 13.7 Race Summary (race.md)
+### 13.7 Race Summary
 
-Generated at race end to provide visibility into expert performance:
+`race.md` generated at race end contains:
 
-```markdown
-# Race Summary
-
-**Session**: {sessionId}
-**Experts**: 3
-**Status**: VOTING
-
-## Scoreboard
-
-| Expert | Best Score | Iterations | Status |
-|--------|------------|------------|--------|
-| 1 | 100% | 3 | ✅ Converged |
-| 2 | 85% | 5 | ⏹ Max iterations |
-| 3 | 100% | 4 | ✅ Converged |
-
-## Winner Selection
-
-Strategy: `balanced`
-Selected: Expert 1 (100% score, smallest diff: +45/-12)
-```
+- Session ID and expert count
+- Scoreboard table: Expert, Best Score, Iterations, Status (Converged/Max iterations)
+- Winner selection: strategy used, selected expert, reasoning (score + diff size)
 
 ### 13.8 Tool Updates for Parallel Mode
 
-#### `finslipa_start`
-
-```typescript
-{
-  name: "finslipa_start",
-  inputSchema: {
-    properties: {
-      // ... existing ...
-      expertCount: {
-        type: "number",
-        default: 1,
-        description: "Number of parallel experts (1 = single-expert mode)"
-      }
-    }
-  }
-}
-```
-
-#### `finslipa_check`
-
-Auto-detects expert ID from current working directory. Scopes iteration tracking to that expert.
-
-#### `finslipa_vote`
-
-Collects best iteration from each expert, then applies voting strategy across all experts.
+- `finslipa_start`: Add `expertCount` parameter (1 = single-expert mode)
+- `finslipa_check`: Auto-detects expert ID from cwd, scopes iteration tracking
+- `finslipa_vote`: Collects best iteration from each expert, applies strategy across all
 
 ---
 
@@ -1266,51 +447,17 @@ Collects best iteration from each expert, then applies voting strategy across al
 ## Appendix A: Example Session Flow
 
 ```
-User: /finslipa Implement a function that calculates fibonacci numbers
+User: /finslipa Implement fibonacci function
+Claude: Started session abc-123. Target: src/fibonacci.ts. Test: bun test
 
-Claude: Started refinement session: abc-123
-        Target files: src/fibonacci.ts
-        Test command: bun test
-        Created directive: .finsliparn/directive.md
+[User implements, PostToolUse triggers check]
 
-        Begin implementing the solution...
+Claude: Iteration 1: 60% (3/5 tests). See feedback/latest.md
 
-[User writes implementation]
+[User reads feedback, fixes implementation]
 
-[PostToolUse hook triggers -> Runs Check -> Updates Directive]
-
-Claude: **Iteration 1 Results**
-        Score: 60% (3/5 tests passing)
-
-        I have updated the directive. See `.finsliparn/sessions/abc-123/feedback/latest.md` for details.
-
-        **Next Step**: Read the feedback file and address the failing tests.
-
-User: [Reads feedback, refines implementation]
-
-[PostToolUse hook triggers -> Runs Check -> Updates Directive]
-
-Claude: ✅ **All tests passing!** Score: 100%
-
-        I have updated `.finsliparn/directive.md` to status COMPLETE.
-        Run `/finslipa:complete` to merge this solution.
+Claude: ✅ All tests passing! Run /finslipa:complete
 
 User: /finslipa:complete
-
-Claude: ✅ Session abc-123 completed successfully!
-        Merged iteration 2 to main branch.
+Claude: ✅ Merged iteration 2 to main.
 ```
-
----
-
-## Appendix B: Alternatives Comparison
-
-| Feature         | Finsliparn       | CCPM             | spec-workflow-mcp |
-| --------------- | ---------------- | ---------------- | ----------------- |
-| Focus           | Solution quality | Task parallelism | Spec docs         |
-| Iteration       | Same task refine | Different tasks  | Sequential        |
-| Validation      | Test results     | Manual review    | Approval workflow |
-| Merge           | Winner-takes-all | Manual           | N/A               |
-| Git             | Worktrees        | Worktrees        | N/A               |
-| Dashboard       | Yes              | No               | Yes               |
-| CC plugin       | Yes              | No               | Yes               |
