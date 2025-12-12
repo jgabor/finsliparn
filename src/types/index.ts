@@ -17,6 +17,21 @@ export type RefinementSession = {
   mergeThreshold?: number; // Score threshold for merge (undefined = disabled)
   bestIteration?: number; // Tracks best score seen across all iterations
   bestScore?: number; // Best score value
+  mode: "single" | "parallel";
+  expertCount?: number; // Number of experts (parallel mode only)
+  experts?: ExpertState[]; // Per-expert state (parallel mode only)
+  selectedExpertId?: number; // Winning expert (parallel mode only)
+  baseSeed?: number; // Base seed for expert seed calculation
+};
+
+export type ExpertState = {
+  id: number; // 0-indexed expert ID
+  seed: number; // baseSeed + id * maxIterations
+  currentIteration: number;
+  iterations: IterationResult[];
+  bestIteration?: number;
+  bestScore?: number;
+  status: "running" | "completed" | "failed";
 };
 
 export type SessionStatus =
@@ -30,7 +45,7 @@ export type SessionStatus =
 export type SessionConfig = {
   maxIterations: number; // Default: 5
   timeout: number; // Default: 300000 (5 min)
-  parallelExperts: boolean; // Default: false (PoC)
+  expertCount: number; // Default: 1 (single-expert), >1 for parallel mode
   mergeThreshold?: number; // Score threshold for merge (0-100, null/undefined = disabled)
   maxSolutions: number; // Max prior solutions to include in feedback (Default: 5)
   improvingOrder: boolean; // Show solutions worst→best (Default: true)
@@ -60,6 +75,7 @@ export type IterationResult = {
   worktreePath?: string;
   feedback?: string; // Markdown feedback
   solution?: SolutionMemory; // Stored solution for context
+  expertId?: number; // Expert ID (parallel mode only)
 };
 
 // Test Execution Types
