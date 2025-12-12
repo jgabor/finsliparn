@@ -76,6 +76,11 @@ server.setRequestHandler(ListToolsRequestSchema, () => ({
             description:
               "Minimum score (0-100) required to merge. If not provided, merge protection is disabled.",
           },
+          expertCount: {
+            type: "number",
+            description:
+              "Number of parallel experts (default: 1). When > 1, creates parallel worktrees for each expert.",
+          },
         },
         required: ["taskDescription"],
       },
@@ -90,6 +95,11 @@ server.setRequestHandler(ListToolsRequestSchema, () => ({
           sessionId: {
             type: "string",
             description: "The session ID to check",
+          },
+          worktreePath: {
+            type: "string",
+            description:
+              "Explicit worktree path for parent orchestration. Overrides cwd-based expert detection. Use when calling on behalf of Task subagents.",
           },
         },
         required: ["sessionId"],
@@ -112,7 +122,7 @@ server.setRequestHandler(ListToolsRequestSchema, () => ({
     {
       name: "finslipa_vote",
       description:
-        "Select the best iteration based on scoring strategy. Stub for Phase 1 - returns highest scoring iteration.",
+        "Select the best iteration based on scoring strategy. In parallel mode, selects best expert. Supports consensus voting for grouping identical outputs.",
       inputSchema: {
         type: "object",
         properties: {
@@ -122,7 +132,7 @@ server.setRequestHandler(ListToolsRequestSchema, () => ({
           },
           strategy: {
             type: "string",
-            enum: ["highest_score", "minimal_diff", "balanced"],
+            enum: ["highest_score", "minimal_diff", "balanced", "consensus"],
             description: "Voting strategy (default: highest_score)",
           },
         },
@@ -199,6 +209,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           maxIterations?: number;
           forceNew?: boolean;
           mergeThreshold?: number;
+          expertCount?: number;
         }
       );
       return {
@@ -206,7 +217,9 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       };
     }
     case "finslipa_check": {
-      const result = await finslipaCheck(args as { sessionId: string });
+      const result = await finslipaCheck(
+        args as { sessionId: string; worktreePath?: string }
+      );
       return {
         content: [{ type: "text", text: JSON.stringify(result, null, 2) }],
       };
@@ -221,7 +234,11 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       const result = await finslipaVote(
         args as {
           sessionId: string;
-          strategy?: "highest_score" | "minimal_diff" | "balanced";
+          strategy?:
+            | "highest_score"
+            | "minimal_diff"
+            | "balanced"
+            | "consensus";
         }
       );
       return {

@@ -1141,6 +1141,7 @@ function setupCheckWorktree(
 export async function finslipaCheck(args: {
   sessionId: string;
   useWorktree?: boolean;
+  worktreePath?: string;
 }): Promise<ToolResponse> {
   const sessionManager = new SessionManager();
   const worktreeManager = new WorktreeManager();
@@ -1158,12 +1159,12 @@ export async function finslipaCheck(args: {
 
       await sessionManager.updateSessionStatus(args.sessionId, "iterating");
 
-      const cwd = process.cwd();
+      const effectivePath = args.worktreePath ?? process.cwd();
       const iterInfo = await determineIterationInfo(
         session,
         sessionManager,
         worktreeManager,
-        cwd
+        effectivePath
       );
 
       const worktreeResult = await setupCheckWorktree({
@@ -1171,7 +1172,7 @@ export async function finslipaCheck(args: {
         session,
         iterInfo,
         useWorktree: args.useWorktree ?? true,
-        cwd,
+        cwd: effectivePath,
       });
       if (isToolResponse(worktreeResult)) {
         return worktreeResult;
