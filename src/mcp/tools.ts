@@ -1115,12 +1115,27 @@ type CheckWorktreeParams = {
   iterInfo: IterationInfo;
   useWorktree: boolean;
   cwd: string;
+  explicitWorktreePath?: string;
 };
 
 function setupCheckWorktree(
   params: CheckWorktreeParams
 ): Promise<{ workingDirectory: string; worktreePath?: string } | ToolResponse> {
-  const { worktreeManager, session, iterInfo, useWorktree, cwd } = params;
+  const {
+    worktreeManager,
+    session,
+    iterInfo,
+    useWorktree,
+    cwd,
+    explicitWorktreePath,
+  } = params;
+
+  if (explicitWorktreePath) {
+    return Promise.resolve({
+      workingDirectory: explicitWorktreePath,
+      worktreePath: explicitWorktreePath,
+    });
+  }
 
   if (!useWorktree) {
     return Promise.resolve({ workingDirectory: cwd });
@@ -1173,6 +1188,7 @@ export async function finslipaCheck(args: {
         iterInfo,
         useWorktree: args.useWorktree ?? true,
         cwd: effectivePath,
+        explicitWorktreePath: args.worktreePath,
       });
       if (isToolResponse(worktreeResult)) {
         return worktreeResult;
