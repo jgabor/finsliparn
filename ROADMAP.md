@@ -77,7 +77,7 @@ See [docs/spec-cc.md](docs/spec-cc.md) for detailed technical specifications.
 
 ### Voting System
 
-- [x] Single-expert voting: `highest_score`, `minimal_diff`, `balanced`
+- [x] Single-expert voting: `highest_score`, `minimal_diff`, `balanced`, `consensus`
 - [x] Cross-expert voting: `highest_score` (MVP)
 
 ---
@@ -181,26 +181,22 @@ Parent:
 
 ---
 
-## Milestone: Dogfooding Round 2 (Parent Orchestration)
+## Milestone: Dogfooding Round 2 (Diversity-First Ordering)
 
-**Goal**: Re-run consensus voting dogfooding with proper parent orchestration.
+**Goal**: Validate parent orchestration by implementing diversity-first ordering in voting.
 
 ### Prerequisites
 
 - [x] Phase 1 of Parent Orchestration (`worktreePath` parameter)
 
-### Task Selection
+### Task: Diversity-First Ordering
 
-Need a real feature to implement. Candidates:
-
-- Diversity-first ordering in voting
-- Soft score improvements
-- Dashboard skeleton
+In voting, prioritize iterations with unique outputs before duplicates. Ensures diverse solutions are considered before redundant ones.
 
 ### Round 2 Steps
 
 - [ ] **Phase 1: Run parallel session with orchestration**
-  - [ ] Select task and write failing tests
+  - [ ] Write failing tests for diversity-first ordering
   - [ ] `finslipa_start` with expertCount: 3
   - [ ] Spawn 3 Task agents
   - [ ] Wait for all agents to complete
@@ -223,7 +219,6 @@ Need a real feature to implement. Candidates:
 
 ### Future Enhancements
 
-- [ ] Diversity-first ordering
 - [ ] Dashboard: local web UI to visualize race between experts
 
 ## Milestone: Packaging & Distribution
