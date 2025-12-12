@@ -4,11 +4,13 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { DiffAnalysis, IterationResult, TestResults } from "../types";
 import { DiffAnalyzer } from "./diff-analyzer";
+import { DirectiveWriter } from "./directive-writer";
 import { FeedbackGenerator } from "./feedback-generator";
 import { ScoringEngine } from "./scoring-engine";
 import { SessionManager } from "./session-manager";
 import { SoftScorer } from "./soft-scorer";
 import { BunTestRunner } from "./test-runner";
+import { WorktreeManager } from "./worktree-manager";
 
 describe("SessionManager", () => {
   test("should create a new session", async () => {
@@ -68,6 +70,261 @@ describe("SessionManager", () => {
 
     expect(loaded?.iterations).toHaveLength(1);
     expect(loaded?.iterations.at(0)?.iteration).toBe(1);
+  });
+});
+
+describe("SessionManager parallel experts", () => {
+  test("initializeExperts creates experts with correct seeds", async () => {
+    const tempDir = join(tmpdir(), `finsliparn-test-${Date.now()}`);
+    await mkdir(tempDir, { recursive: true });
+
+    const manager = new SessionManager(tempDir);
+    const session = await manager.createSession("Test task", {
+      maxIterations: 5,
+    });
+    await manager.initializeExperts(session.id, 3, 1000);
+
+    const loaded = await manager.loadSession(session.id);
+    expect(loaded?.experts).toHaveLength(3);
+    expect(loaded?.mode).toBe("parallel");
+    expect(loaded?.baseSeed).toBe(1000);
+  });
+
+  test("seed formula: baseSeed + expertId * maxIterations", async () => {
+    const tempDir = join(tmpdir(), `finsliparn-test-${Date.now()}`);
+    await mkdir(tempDir, { recursive: true });
+
+    const manager = new SessionManager(tempDir);
+    const session = await manager.createSession("Test task", {
+      maxIterations: 5,
+    });
+    await manager.initializeExperts(session.id, 3, 1000);
+
+    const loaded = await manager.loadSession(session.id);
+    expect(loaded?.experts?.[0]?.seed).toBe(1000);
+    expect(loaded?.experts?.[1]?.seed).toBe(1005);
+    expect(loaded?.experts?.[2]?.seed).toBe(1010);
+  });
+
+  test("getExpert returns correct expert state", async () => {
+    const tempDir = join(tmpdir(), `finsliparn-test-${Date.now()}`);
+    await mkdir(tempDir, { recursive: true });
+
+    const manager = new SessionManager(tempDir);
+    const session = await manager.createSession("Test task", {
+      maxIterations: 5,
+    });
+    await manager.initializeExperts(session.id, 2, 42);
+
+    const expert0 = await manager.getExpert(session.id, 0);
+    const expert1 = await manager.getExpert(session.id, 1);
+
+    expect(expert0?.id).toBe(0);
+    expect(expert0?.seed).toBe(42);
+    expect(expert1?.id).toBe(1);
+    expect(expert1?.seed).toBe(47);
+  });
+
+  test("addIterationToExpert tracks per-expert history", async () => {
+    const tempDir = join(tmpdir(), `finsliparn-test-${Date.now()}`);
+    await mkdir(tempDir, { recursive: true });
+
+    const manager = new SessionManager(tempDir);
+    const session = await manager.createSession("Test task", {
+      maxIterations: 5,
+    });
+    await manager.initializeExperts(session.id, 2, 100);
+
+    const iteration: IterationResult = {
+      iteration: 1,
+      status: "completed",
+      timestamp: new Date(),
+      score: 75,
+      expertId: 0,
+    };
+
+    await manager.addIterationToExpert(session.id, 0, iteration);
+
+    const expert0 = await manager.getExpert(session.id, 0);
+    const expert1 = await manager.getExpert(session.id, 1);
+
+    expect(expert0?.iterations).toHaveLength(1);
+    expect(expert0?.iterations[0]?.score).toBe(75);
+    expect(expert1?.iterations).toHaveLength(0);
+  });
+
+  test("updateExpertBestResult tracks highest score", async () => {
+    const tempDir = join(tmpdir(), `finsliparn-test-${Date.now()}`);
+    await mkdir(tempDir, { recursive: true });
+
+    const manager = new SessionManager(tempDir);
+    const session = await manager.createSession("Test task", {
+      maxIterations: 5,
+    });
+    await manager.initializeExperts(session.id, 1, 100);
+
+    await manager.updateExpertBestResult(session.id, 0, 1, 60);
+    let expert = await manager.getExpert(session.id, 0);
+    expect(expert?.bestScore).toBe(60);
+    expect(expert?.bestIteration).toBe(1);
+
+    await manager.updateExpertBestResult(session.id, 0, 2, 80);
+    expert = await manager.getExpert(session.id, 0);
+    expect(expert?.bestScore).toBe(80);
+    expect(expert?.bestIteration).toBe(2);
+
+    await manager.updateExpertBestResult(session.id, 0, 3, 70);
+    expert = await manager.getExpert(session.id, 0);
+    expect(expert?.bestScore).toBe(80);
+    expect(expert?.bestIteration).toBe(2);
+  });
+});
+
+describe("WorktreeManager parallel experts", () => {
+  test("detectExpertFromPath parses expertId and iteration", () => {
+    const tempDir = join(tmpdir(), `finsliparn-test-${Date.now()}`);
+    const manager = new WorktreeManager(tempDir);
+
+    const result = manager.detectExpertFromPath(
+      "/path/to/finsliparn/abc-123/expert-2/iteration-3"
+    );
+
+    expect(result).toEqual({ expertId: 2, iteration: 3 });
+  });
+
+  test("detectExpertFromPath returns null for non-expert paths", () => {
+    const tempDir = join(tmpdir(), `finsliparn-test-${Date.now()}`);
+    const manager = new WorktreeManager(tempDir);
+
+    const result = manager.detectExpertFromPath("/path/to/regular/worktree");
+
+    expect(result).toBeNull();
+  });
+
+  test("detectExpertFromPath handles single-digit and multi-digit IDs", () => {
+    const tempDir = join(tmpdir(), `finsliparn-test-${Date.now()}`);
+    const manager = new WorktreeManager(tempDir);
+
+    const single = manager.detectExpertFromPath(
+      "/finsliparn/sess/expert-0/iteration-1"
+    );
+    const multi = manager.detectExpertFromPath(
+      "/finsliparn/sess/expert-12/iteration-99"
+    );
+
+    expect(single).toEqual({ expertId: 0, iteration: 1 });
+    expect(multi).toEqual({ expertId: 12, iteration: 99 });
+  });
+});
+
+describe("DirectiveWriter parallel experts", () => {
+  test("buildHeader shows seed for experts", async () => {
+    const tempDir = join(tmpdir(), `finsliparn-test-${Date.now()}`);
+    await mkdir(tempDir, { recursive: true });
+
+    const manager = new SessionManager(tempDir);
+    const session = await manager.createSession("Test task", {
+      maxIterations: 5,
+    });
+    await manager.initializeExperts(session.id, 2, 42);
+
+    const loaded = await manager.loadSession(session.id);
+    expect(loaded).toBeDefined();
+    const writer = new DirectiveWriter(tempDir);
+
+    await writer.write(
+      {
+        session: loaded as NonNullable<typeof loaded>,
+        latestIteration: {
+          iteration: 1,
+          status: "pending",
+          timestamp: new Date(),
+          score: 0,
+          expertId: 1,
+        },
+        nextActions: ["Test action"],
+        workingDirectory: "/test/path",
+      },
+      1
+    );
+
+    const directivePath = join(
+      tempDir,
+      ".finsliparn",
+      "sessions",
+      session.id,
+      "directives",
+      "expert-1.md"
+    );
+    const content = await Bun.file(directivePath).text();
+
+    expect(content).toContain("**Expert**: 1 (seed: 47)");
+    expect(content).not.toContain("seed: unknown");
+  });
+
+  test("writeForExpert creates expert-specific directive file", async () => {
+    const tempDir = join(tmpdir(), `finsliparn-test-${Date.now()}`);
+    await mkdir(tempDir, { recursive: true });
+
+    const manager = new SessionManager(tempDir);
+    const session = await manager.createSession("Test task", {
+      maxIterations: 5,
+    });
+    await manager.initializeExperts(session.id, 2, 100);
+
+    const loaded = await manager.loadSession(session.id);
+    expect(loaded).toBeDefined();
+    const writer = new DirectiveWriter(tempDir);
+
+    await writer.write(
+      {
+        session: loaded as NonNullable<typeof loaded>,
+        latestIteration: {
+          iteration: 1,
+          status: "pending",
+          timestamp: new Date(),
+          score: 0,
+          expertId: 0,
+        },
+        nextActions: [],
+      },
+      0
+    );
+
+    await writer.write(
+      {
+        session: loaded as NonNullable<typeof loaded>,
+        latestIteration: {
+          iteration: 1,
+          status: "pending",
+          timestamp: new Date(),
+          score: 0,
+          expertId: 1,
+        },
+        nextActions: [],
+      },
+      1
+    );
+
+    const expert0Path = join(
+      tempDir,
+      ".finsliparn",
+      "sessions",
+      session.id,
+      "directives",
+      "expert-0.md"
+    );
+    const expert1Path = join(
+      tempDir,
+      ".finsliparn",
+      "sessions",
+      session.id,
+      "directives",
+      "expert-1.md"
+    );
+
+    expect(await Bun.file(expert0Path).exists()).toBe(true);
+    expect(await Bun.file(expert1Path).exists()).toBe(true);
   });
 });
 
