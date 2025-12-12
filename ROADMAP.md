@@ -136,6 +136,82 @@ When Finsliparn modifies its own code:
 
 ---
 
+## Milestone: Parent Orchestration for Claude Code
+
+**Goal**: Enable proper iteration tracking when using Claude Code's Task subagents for parallel experts.
+
+### Problem
+
+Task subagents lack MCP access - they cannot call `finslipa_check` to register iterations. This is Claude Code-specific; Copilot CLI agents have direct MCP access.
+
+### Solution: Parent Orchestration
+
+Parent session calls `finslipa_check` on behalf of each expert after they complete.
+
+```
+Parent:
+  1. finslipa_start(expertCount: N) → worktree paths
+  2. Spawn N Task agents (each implements + runs `bun test`)
+  3. Wait for agents to complete
+  4. For each expert:
+       finslipa_check(sessionId, worktreePath: expert's path)
+  5. finslipa_vote(sessionId)
+  6. finslipa_merge(sessionId)
+```
+
+### Orchestration Implementation
+
+- [ ] **Phase 1: Add `worktreePath` parameter to `finslipa_check`**
+  - [ ] Accept optional `worktreePath` parameter (overrides cwd detection)
+  - [ ] Validate path is within session's worktree structure
+  - [ ] Auto-detect expertId from provided path
+- [ ] **Phase 2: Completion detection**
+  - [ ] Subagents write `.finsliparn-done` marker on completion
+  - [ ] Parent polls for markers or uses Task completion status
+- [ ] **Phase 3: Documentation**
+  - [ ] Update parallel experts documentation with orchestration pattern
+  - [ ] Add example prompts for spawning subagents
+
+### Orchestration Design Decisions
+
+- Parent orchestration is Claude Code-specific (Copilot uses direct MCP)
+- `worktreePath` parameter enables external callers (parent, CI/CD)
+- No HTTP endpoint needed (keeps architecture simple)
+- Copilot support unaffected (agents call MCP directly)
+
+---
+
+## Milestone: Dogfooding Round 2 (Parent Orchestration)
+
+**Goal**: Re-run consensus voting dogfooding with proper parent orchestration.
+
+### Prerequisites
+
+- [ ] Parent Orchestration milestone complete
+
+### Round 2 Steps
+
+- [ ] **Phase 1: Run parallel session with orchestration**
+  - [ ] `finslipa_start` with expertCount: 3
+  - [ ] Spawn 3 Task agents
+  - [ ] Wait for all agents to complete
+  - [ ] Parent calls `finslipa_check(sessionId, worktreePath)` for each expert
+- [ ] **Phase 2: Vote and merge**
+  - [ ] `finslipa_vote` selects winner (race.md generated)
+  - [ ] `finslipa_merge` integrates winning implementation
+- [ ] **Phase 3: Validation**
+  - [ ] race.md contains all 3 experts with scores
+  - [ ] Session state shows proper iteration counts per expert
+  - [ ] All tests pass after merge
+
+### Success Criteria
+
+- race.md generated with scoreboard (not manual selection)
+- Each expert has recorded iterations in session state
+- Full automated flow from start to merge
+
+---
+
 ### Future Enhancements
 
 - [ ] Diversity-first ordering
