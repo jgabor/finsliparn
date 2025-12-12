@@ -80,9 +80,58 @@ See [docs/spec-cc.md](docs/spec-cc.md) for detailed technical specifications.
 - [x] Single-expert voting: `highest_score`, `minimal_diff`, `balanced`
 - [x] Cross-expert voting: `highest_score` (MVP)
 
+---
+
+## Milestone: Dogfooding (Consensus Voting via Parallel Experts)
+
+**Goal**: Validate parallel experts by using Finsliparn to implement consensus voting in itself.
+
+### Why This Task
+
+- Real feature from roadmap (not artificial test)
+- Multiple valid algorithms (hash-based, deep equality, normalized comparison)
+- Clear TDD criteria (4 failing tests → all pass)
+- Isolated change (won't break running MCP server)
+
+### Safety Analysis
+
+When Finsliparn modifies its own code:
+
+- MCP server continues with OLD code during session
+- `bun test` spawns subprocess with MODIFIED code
+- Tests validate new code independently
+- After merge, server restarts with improvements
+
+### Dogfooding Steps
+
+- [ ] **Phase 1: Write failing tests** (`src/mcp/tools.test.ts`)
+  - [ ] `groups identical outputs together`
+  - [ ] `counts votes per output group`
+  - [ ] `ranks groups by vote count descending`
+  - [ ] `uses score as tiebreaker within same vote count`
+- [ ] **Phase 2: Run parallel session**
+  - [ ] `finslipa_start` with expertCount: 3, maxIterations: 5
+  - [ ] Each expert implements `consensus` strategy differently
+- [ ] **Phase 3: Vote and merge**
+  - [ ] `finslipa_vote` selects winner
+  - [ ] `race.md` generated with scoreboard
+  - [ ] `finslipa_merge` integrates winning implementation
+- [ ] **Phase 4: Validation**
+  - [ ] All 4 consensus tests pass
+  - [ ] All existing tests still pass
+  - [ ] Feature works in production
+
+### Success Criteria
+
+- 3 experts with different iteration counts in race.md
+- Each expert has unique seed in directive
+- Winner selected and merged cleanly
+- `bun test` passes (34+ tests)
+
+---
+
 ### Future Enhancements
 
-- [ ] Consensus voting (group by identical outputs, count votes)
 - [ ] Diversity-first ordering
 - [ ] Dashboard: local web UI to visualize race between experts
 
