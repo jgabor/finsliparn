@@ -110,70 +110,159 @@ export class DirectiveWriter {
     this.feedbackGenerator = new FeedbackGenerator();
   }
 
-  async write(context: DirectiveContext): Promise<void> {
-    const directive = await this.buildDirective(context);
-    const directivePath = join(this.finsliparnDir, "directive.md");
+  async write(context: DirectiveContext, expertId?: number): Promise<void> {
+    const directive = await this.buildDirective(context, expertId);
 
-    await mkdir(this.finsliparnDir, { recursive: true });
+    if (context.session.mode === "parallel" && expertId !== undefined) {
+      await this.writeForExpert(directive, context.session.id, expertId);
+    } else {
+      const directivePath = join(this.finsliparnDir, "directive.md");
+      await mkdir(this.finsliparnDir, { recursive: true });
+      await Bun.write(directivePath, directive);
+    }
+  }
+
+  private async writeForExpert(
+    directive: string,
+    sessionId: string,
+    expertId: number
+  ): Promise<void> {
+    const directivesDir = join(
+      this.finsliparnDir,
+      "sessions",
+      sessionId,
+      "directives"
+    );
+    await mkdir(directivesDir, { recursive: true });
+    const directivePath = join(directivesDir, `expert-${expertId}.md`);
     await Bun.write(directivePath, directive);
   }
 
-  private async buildDirective(context: DirectiveContext): Promise<string> {
+  private getExpertStatusIcon(status: string): string {
+    switch (status) {
+      case "completed":
+        return "✅";
+      case "failed":
+        return "❌";
+      default:
+        return "🔄";
+    }
+  }
+
+  async writeRaceSummary(session: RefinementSession): Promise<void> {
+    if (session.mode !== "parallel" || !session.experts) {
+      return;
+    }
+
+    let content = "# Race Summary\n\n";
+    content += `**Session**: ${session.id}\n`;
+    content += `**Experts**: ${session.expertCount}\n`;
+    content += `**Status**: ${session.status.toUpperCase()}\n\n`;
+
+    content += "## Scoreboard\n\n";
+    content += "| Expert | Best Score | Iterations | Status |\n";
+    content += "|--------|------------|------------|--------|\n";
+
+    for (const expert of session.experts) {
+      const completedCount = expert.iterations.filter(
+        (i) => i.status === "completed"
+      ).length;
+      const statusIcon = this.getExpertStatusIcon(expert.status);
+      const bestScoreStr =
+        expert.bestScore !== undefined ? `${expert.bestScore}%` : "-";
+      content += `| ${expert.id} | ${bestScoreStr} | ${completedCount} | ${statusIcon} ${expert.status} |\n`;
+    }
+
+    if (session.selectedIteration !== undefined) {
+      content += "\n## Winner Selection\n\n";
+      const winnerExpert = session.experts.find(
+        (e) => e.id === session.selectedExpertId
+      );
+      if (winnerExpert) {
+        content += `**Selected**: Expert ${winnerExpert.id}\n`;
+        content += `**Score**: ${winnerExpert.bestScore}%\n`;
+        content += `**Iteration**: ${session.selectedIteration}\n`;
+      }
+    }
+
+    const racePath = join(
+      this.finsliparnDir,
+      "sessions",
+      session.id,
+      "race.md"
+    );
+    await mkdir(join(this.finsliparnDir, "sessions", session.id), {
+      recursive: true,
+    });
+    await Bun.write(racePath, content);
+  }
+
+  private buildHeader(context: DirectiveContext, expertId?: number): string {
     const { session, latestIteration } = context;
-
     let content = "# Finsliparn Directive\n\n";
-
-    // Status
     content += `**Status**: ${session.status.toUpperCase()}\n`;
     content += `**Session ID**: ${session.id}\n`;
+    if (session.mode === "parallel" && expertId !== undefined) {
+      const expert = session.experts?.find((e) => e.id === expertId);
+      content += `**Expert**: ${expertId} (seed: ${expert?.seed ?? "unknown"})\n`;
+    }
     content += `**Iteration**: ${latestIteration.iteration}/${session.maxIterations}\n`;
-
-    // Working directory (where to make changes)
     if (context.workingDirectory) {
       content += `**Working Directory**: \`${context.workingDirectory}\`\n`;
     }
     content += "\n";
-
-    // Score
     if (latestIteration.score !== undefined) {
       content += `**Score**: ${latestIteration.score}%\n\n`;
     }
+    return content;
+  }
 
-    // Merge eligibility warning
+  private buildMergeWarning(context: DirectiveContext): string {
+    const { session, latestIteration } = context;
     const eligibility = isMergeEligible(session, latestIteration);
-    if (!eligibility.canMerge) {
-      const allTestsPassing =
-        latestIteration.testResults?.failed === 0 &&
-        (latestIteration.testResults?.total ?? 0) > 0;
-
-      if (allTestsPassing) {
-        content += "## ⚠️ Important\n\n";
-        content +=
-          "- DO NOT call `finslipa_merge` until score reaches 100% OR 2+ iterations complete\n";
-        content +=
-          "- DO NOT manually merge with git - use `finslipa_merge` to ensure proper tracking\n";
-        content += `- Current: Score ${latestIteration.score}% | Iterations ${eligibility.completedIterations}/2 minimum | Remaining ${session.maxIterations - latestIteration.iteration}\n\n`;
-      }
-
-      // Auto-continue instruction
-      content += "## ⚠️ Auto-Continue Required\n\n";
-      content += "You MUST:\n";
-      content += "1. Make code improvements NOW\n";
-      content += "2. Call `finslipa_check` immediately after\n\n";
-      content +=
-        "Do NOT report status and wait. Do NOT ask for confirmation.\n\n";
+    if (eligibility.canMerge) {
+      return "";
     }
 
-    // Plateau warning
+    let content = "";
+    const allTestsPassing =
+      latestIteration.testResults?.failed === 0 &&
+      (latestIteration.testResults?.total ?? 0) > 0;
+
+    if (allTestsPassing) {
+      content += "## ⚠️ Important\n\n";
+      content +=
+        "- DO NOT call `finslipa_merge` until score reaches 100% OR 2+ iterations complete\n";
+      content +=
+        "- DO NOT manually merge with git - use `finslipa_merge` to ensure proper tracking\n";
+      content += `- Current: Score ${latestIteration.score}% | Iterations ${eligibility.completedIterations}/2 minimum | Remaining ${session.maxIterations - latestIteration.iteration}\n\n`;
+    }
+
+    content += "## ⚠️ Auto-Continue Required\n\n";
+    content += "You MUST:\n";
+    content += "1. Make code improvements NOW\n";
+    content += "2. Call `finslipa_check` immediately after\n\n";
+    content +=
+      "Do NOT report status and wait. Do NOT ask for confirmation.\n\n";
+    return content;
+  }
+
+  private async buildDirective(
+    context: DirectiveContext,
+    expertId?: number
+  ): Promise<string> {
+    const { session, latestIteration } = context;
+    let content = this.buildHeader(context, expertId);
+
+    content += this.buildMergeWarning(context);
+
     const plateau = detectPlateau(session);
     if (plateau.detected) {
       content += buildPlateauWarning(plateau, latestIteration.score);
     }
 
-    // Task description
     content += `## Task\n\n${session.taskDescription}\n\n`;
 
-    // Spec hints (if any)
     if (context.specHints && context.specHints.length > 0) {
       content += "## Reference Documentation\n\n";
       content += "Review these files for requirements and specifications:\n\n";
@@ -183,16 +272,13 @@ export class DirectiveWriter {
       content += "\n";
     }
 
-    // Latest feedback
-    const feedback = await this.feedbackGenerator.generate(context);
-    content += feedback;
+    content += await this.feedbackGenerator.generate(context);
 
-    // Required actions
     if (context.nextActions.length > 0) {
       content += "\n## Required Actions\n\n";
-      for (let i = 0; i < context.nextActions.length; i++) {
-        content += `${i + 1}. ${context.nextActions[i]}\n`;
-      }
+      context.nextActions.forEach((action, i) => {
+        content += `${i + 1}. ${action}\n`;
+      });
     }
 
     return content;
