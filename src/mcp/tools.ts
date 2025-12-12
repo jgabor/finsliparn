@@ -514,6 +514,52 @@ function selectMinimalDiffWinner(
   });
 }
 
+type ConsensusResult = {
+  winner: IterationResult;
+  voteCount: number;
+  groupCount: number;
+};
+
+function selectConsensusWinner(
+  completedIterations: IterationResult[]
+): ConsensusResult | null {
+  const groups = new Map<string, IterationResult[]>();
+
+  for (const iteration of completedIterations) {
+    const code = iteration.solution?.code ?? "";
+    if (!groups.has(code)) {
+      groups.set(code, []);
+    }
+    groups.get(code)?.push(iteration);
+  }
+
+  const sortedGroups = Array.from(groups.entries()).sort((a, b) => {
+    const voteDiff = b[1].length - a[1].length;
+    if (voteDiff !== 0) {
+      return voteDiff;
+    }
+    const maxScoreA = Math.max(...a[1].map((iter) => iter.score ?? 0));
+    const maxScoreB = Math.max(...b[1].map((iter) => iter.score ?? 0));
+    return maxScoreB - maxScoreA;
+  });
+
+  const winningGroup = sortedGroups[0];
+  if (!winningGroup) {
+    return null;
+  }
+
+  const [, iterations] = winningGroup;
+  const winner = iterations.reduce((best, current) =>
+    (current.score ?? 0) > (best.score ?? 0) ? current : best
+  );
+
+  return {
+    winner,
+    voteCount: iterations.length,
+    groupCount: groups.size,
+  };
+}
+
 function selectBalancedWinner(
   completedIterations: IterationResult[]
 ): IterationResult {
@@ -1278,7 +1324,7 @@ async function voteParallelMode(
 async function voteSingleMode(
   session: RefinementSession,
   sessionManager: SessionManager,
-  strategy: "highest_score" | "minimal_diff" | "balanced",
+  strategy: "highest_score" | "minimal_diff" | "balanced" | "consensus",
   returnBest: boolean
 ): Promise<ToolResponse> {
   if (session.iterations.length === 0) {
@@ -1330,6 +1376,9 @@ async function voteSingleMode(
   );
 
   let winner: IterationResult;
+  let voteCount: number | undefined;
+  let groupCount: number | undefined;
+
   if (strategy === "highest_score") {
     winner = completedIterations.reduce((best, current) =>
       (current.score ?? 0) > (best.score ?? 0) ? current : best
@@ -1342,28 +1391,59 @@ async function voteSingleMode(
         { totalIterations: completedIterations.length }
       );
     }
+  } else if (strategy === "consensus") {
+    const consensusResult = selectConsensusWinner(completedIterations);
+    if (!consensusResult) {
+      return {
+        success: false,
+        message: "No valid groups found for consensus voting",
+        error: {
+          code: "NO_VALID_GROUPS",
+          details: "Could not group iterations by solution code",
+        },
+      };
+    }
+    winner = consensusResult.winner;
+    voteCount = consensusResult.voteCount;
+    groupCount = consensusResult.groupCount;
   } else {
     winner = selectBalancedWinner(completedIterations);
   }
 
   await sessionManager.updateSessionStatus(session.id, "evaluating");
 
+  const data: {
+    selectedIteration: number;
+    score: number | undefined;
+    strategy: string;
+    totalIterations: number;
+    voteCount?: number;
+    groupCount?: number;
+  } = {
+    selectedIteration: winner.iteration,
+    score: winner.score,
+    strategy,
+    totalIterations: completedIterations.length,
+  };
+
+  if (voteCount !== undefined) {
+    data.voteCount = voteCount;
+  }
+  if (groupCount !== undefined) {
+    data.groupCount = groupCount;
+  }
+
   return {
     success: true,
     message: `Selected iteration ${winner.iteration} with score ${winner.score}`,
-    data: {
-      selectedIteration: winner.iteration,
-      score: winner.score,
-      strategy,
-      totalIterations: completedIterations.length,
-    },
+    data,
     nextSteps: [`Call finslipa_merge to merge iteration ${winner.iteration}`],
   };
 }
 
 export async function finslipaVote(args: {
   sessionId: string;
-  strategy?: "highest_score" | "minimal_diff" | "balanced";
+  strategy?: "highest_score" | "minimal_diff" | "balanced" | "consensus";
   returnBest?: boolean;
 }): Promise<ToolResponse> {
   const sessionManager = new SessionManager();
