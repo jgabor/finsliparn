@@ -116,6 +116,7 @@ describe("FeedbackGenerator", () => {
         maxIterations: 5,
         currentIteration: 1,
         iterations: [],
+        mode: "single" as const,
       },
       latestIteration: {
         iteration: 1,

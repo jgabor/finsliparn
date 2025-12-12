@@ -14,7 +14,7 @@ const log = createLogger("SessionManager");
 const DEFAULT_CONFIG: SessionConfig = {
   maxIterations: 5,
   timeout: 300_000, // 5 min
-  parallelExperts: false,
+  expertCount: 1,
   maxSolutions: 5,
   improvingOrder: true,
   returnBestResult: true,
@@ -135,6 +135,7 @@ export class SessionManager {
       currentIteration: 0,
       iterations: [],
       mergeThreshold: finalConfig.mergeThreshold,
+      mode: finalConfig.expertCount > 1 ? "parallel" : "single",
     };
 
     await this.persistSession(session);
