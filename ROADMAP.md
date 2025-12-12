@@ -161,10 +161,9 @@ Parent:
 
 ### Orchestration Implementation
 
-- [ ] **Phase 1: Add `worktreePath` parameter to `finslipa_check`**
-  - [ ] Accept optional `worktreePath` parameter (overrides cwd detection)
-  - [ ] Validate path is within session's worktree structure
-  - [ ] Auto-detect expertId from provided path
+- [x] **Phase 1: Add `worktreePath` parameter to `finslipa_check`**
+  - [x] Accept optional `worktreePath` parameter (overrides cwd detection)
+  - [x] Auto-detect expertId from provided path via `detectExpertFromPath()`
 - [ ] **Phase 2: Completion detection**
   - [ ] Subagents write `.finsliparn-done` marker on completion
   - [ ] Parent polls for markers or uses Task completion status
