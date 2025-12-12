@@ -49,36 +49,36 @@ See [docs/spec-cc.md](docs/spec-cc.md) for detailed technical specifications.
 
 ### Implementation
 
-- [ ] **Phase 1: Type Updates** (`src/types/index.ts`)
-  - [ ] Add `mode: "single" | "parallel"` to `RefinementSession`
-  - [ ] Add `expertCount`, `experts`, `selectedExpertId`, `baseSeed` fields
-  - [ ] Add `ExpertState` type with `id`, `seed`, `currentIteration`, `iterations[]`, `bestIteration`, `bestScore`, `status`
-  - [ ] Add `expertId?: number` to `IterationResult`
-- [ ] **Phase 2: Worktree Manager** (`src/core/worktree-manager.ts`)
-  - [ ] Add `createExpertWorktree(sessionId, expertId, iteration, baseBranch)`
-  - [ ] Add `detectExpertFromPath(worktreePath)` → `{ expertId, iteration } | null`
-  - [ ] Update `listSessionWorktreePaths()` for 4-level nesting
-- [ ] **Phase 3: Session Manager** (`src/core/session-manager.ts`)
-  - [ ] Add `initializeExperts(sessionId, count, baseSeed)` method
-  - [ ] Add `getExpert(sessionId, expertId)` / `updateExpert(sessionId, expertId, state)` methods
-  - [ ] Add `addIterationToExpert(sessionId, expertId, iteration)` method
-  - [ ] Seed formula: `baseSeed + expertId * maxIterations`
-  - [ ] Lock scope: per-expert in parallel mode (`{sessionId}:expert-{E}`)
-- [ ] **Phase 4: Directive Writer** (`src/core/directive-writer.ts`)
-  - [ ] Add `writeForExpert(context, expertId)` method
-  - [ ] Path logic: parallel → `sessions/{id}/directives/expert-{N}.md`
-  - [ ] Add `writeRaceSummary(session)` for `race.md`
-  - [ ] Update `write()` to delegate based on `session.mode`
-- [ ] **Phase 5: Tool Updates** (`src/mcp/tools.ts`)
-  - [ ] `finslipa_start`: add `expertCount` parameter (default: 1), create N worktrees/directives, return array of working directories
-  - [ ] `finslipa_check`: auto-detect expert ID from cwd, scope to expert's iteration counter and state
-  - [ ] `finslipa_vote`: collect best from each expert, apply `highest_score` cross-expert, set `selectedExpertId`, generate `race.md`
-  - [ ] `finslipa_merge`: use `selectedExpertId` to find correct branch, cleanup all expert worktrees
+- [x] **Phase 1: Type Updates** (`src/types/index.ts`)
+  - [x] Add `mode: "single" | "parallel"` to `RefinementSession`
+  - [x] Add `expertCount`, `experts`, `selectedExpertId`, `baseSeed` fields
+  - [x] Add `ExpertState` type with `id`, `seed`, `currentIteration`, `iterations[]`, `bestIteration`, `bestScore`, `status`
+  - [x] Add `expertId?: number` to `IterationResult`
+- [x] **Phase 2: Worktree Manager** (`src/core/worktree-manager.ts`)
+  - [x] Add `createExpertWorktree(sessionId, expertId, iteration, baseBranch)`
+  - [x] Add `detectExpertFromPath(worktreePath)` → `{ expertId, iteration } | null`
+  - [x] Update `listSessionWorktreePaths()` for 4-level nesting
+- [x] **Phase 3: Session Manager** (`src/core/session-manager.ts`)
+  - [x] Add `initializeExperts(sessionId, count, baseSeed)` method
+  - [x] Add `getExpert(sessionId, expertId)` / `updateExpert(sessionId, expertId, state)` methods
+  - [x] Add `addIterationToExpert(sessionId, expertId, iteration)` method
+  - [x] Seed formula: `baseSeed + expertId * maxIterations`
+  - [x] Lock scope: per-expert in parallel mode (`{sessionId}:expert-{E}`)
+- [x] **Phase 4: Directive Writer** (`src/core/directive-writer.ts`)
+  - [x] Add `writeForExpert(context, expertId)` method
+  - [x] Path logic: parallel → `sessions/{id}/directives/expert-{N}.md`
+  - [x] Add `writeRaceSummary(session)` for `race.md`
+  - [x] Update `write()` to delegate based on `session.mode`
+- [x] **Phase 5: Tool Updates** (`src/mcp/tools.ts`)
+  - [x] `finslipa_start`: add `expertCount` parameter (default: 1), create N worktrees/directives, return array of working directories
+  - [x] `finslipa_check`: auto-detect expert ID from cwd, scope to expert's iteration counter and state
+  - [x] `finslipa_vote`: collect best from each expert, apply `highest_score` cross-expert, set `selectedExpertId`, generate `race.md`
+  - [x] `finslipa_merge`: use `selectedExpertId` to find correct branch, cleanup all expert worktrees
 
 ### Voting System
 
 - [x] Single-expert voting: `highest_score`, `minimal_diff`, `balanced`
-- [ ] Cross-expert voting: `highest_score` (MVP)
+- [x] Cross-expert voting: `highest_score` (MVP)
 
 ### Future Enhancements
 
