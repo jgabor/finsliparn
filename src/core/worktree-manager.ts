@@ -4,6 +4,7 @@ import { simpleGit } from "simple-git";
 import { createLogger } from "./logger";
 
 const log = createLogger("WorktreeManager");
+const EXPERT_PATH_PATTERN = /expert-(\d+)\/iteration-(\d+)/;
 
 export class WorktreeManager {
   private readonly projectRoot: string;
@@ -94,27 +95,67 @@ export class WorktreeManager {
     }
   }
 
+  private async safeReaddir(path: string): Promise<string[]> {
+    try {
+      return await readdir(path);
+    } catch {
+      return [];
+    }
+  }
+
+  private async collectExpertIterations(
+    basePath: string,
+    relativePath: string
+  ): Promise<string[]> {
+    const iterationDirs = await this.safeReaddir(basePath);
+    if (iterationDirs.length === 0) {
+      return [relativePath];
+    }
+    return iterationDirs.map((iterDir) => join(relativePath, iterDir));
+  }
+
+  private async collectSessionContents(
+    topDir: string,
+    sessionDir: string
+  ): Promise<string[]> {
+    const sessionPath = join(this.worktreesDir, topDir, sessionDir);
+    const level3Dirs = await this.safeReaddir(sessionPath);
+    if (level3Dirs.length === 0) {
+      return [join(topDir, sessionDir)];
+    }
+
+    const paths: string[] = [];
+    for (const level3Dir of level3Dirs) {
+      if (level3Dir.startsWith("expert-")) {
+        const expertPaths = await this.collectExpertIterations(
+          join(sessionPath, level3Dir),
+          join(topDir, sessionDir, level3Dir)
+        );
+        paths.push(...expertPaths);
+      } else {
+        paths.push(join(topDir, sessionDir, level3Dir));
+      }
+    }
+    return paths;
+  }
+
   async listSessionWorktreePaths(): Promise<string[]> {
     const worktreePaths: string[] = [];
     const topLevelDirs = await this.listWorktrees();
 
     for (const topDir of topLevelDirs) {
       const topPath = join(this.worktreesDir, topDir);
-      try {
-        const sessionDirs = await readdir(topPath);
-        for (const sessionDir of sessionDirs) {
-          const sessionPath = join(topPath, sessionDir);
-          try {
-            const iterationDirs = await readdir(sessionPath);
-            for (const iterDir of iterationDirs) {
-              worktreePaths.push(join(topDir, sessionDir, iterDir));
-            }
-          } catch {
-            worktreePaths.push(join(topDir, sessionDir));
-          }
-        }
-      } catch {
+      const sessionDirs = await this.safeReaddir(topPath);
+      if (sessionDirs.length === 0) {
         worktreePaths.push(topDir);
+        continue;
+      }
+      for (const sessionDir of sessionDirs) {
+        const sessionPaths = await this.collectSessionContents(
+          topDir,
+          sessionDir
+        );
+        worktreePaths.push(...sessionPaths);
       }
     }
 
@@ -199,5 +240,28 @@ export class WorktreeManager {
 
   getWorktreePath(branchName: string): string {
     return join(this.worktreesDir, branchName);
+  }
+
+  createExpertWorktree(
+    sessionId: string,
+    expertId: number,
+    iteration: number,
+    baseBranch = "main"
+  ): Promise<string> {
+    const branchName = `finsliparn/${sessionId}/expert-${expertId}/iteration-${iteration}`;
+    return this.createWorktree(branchName, baseBranch);
+  }
+
+  detectExpertFromPath(
+    worktreePath: string
+  ): { expertId: number; iteration: number } | null {
+    const match = worktreePath.match(EXPERT_PATH_PATTERN);
+    if (!(match?.[1] && match[2])) {
+      return null;
+    }
+    return {
+      expertId: Number.parseInt(match[1], 10),
+      iteration: Number.parseInt(match[2], 10),
+    };
   }
 }
