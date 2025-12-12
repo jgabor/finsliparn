@@ -228,6 +228,7 @@ type CheckContext = {
   iteration: number;
   workingDirectory: string;
   worktreePath?: string;
+  expertId?: number;
 };
 
 type TestPhaseResult = {
@@ -381,24 +382,38 @@ async function persistIterationPhase(
     diff: diffAnalysis,
     worktreePath: context.worktreePath,
     solution,
+    expertId: context.expertId,
   };
 
-  await sessionManager.addIteration(context.sessionId, iterationResult);
+  if (context.expertId !== undefined) {
+    await sessionManager.addIterationToExpert(
+      context.sessionId,
+      context.expertId,
+      iterationResult
+    );
+    await sessionManager.updateExpertBestResult(
+      context.sessionId,
+      context.expertId,
+      context.iteration,
+      scoreResult.score
+    );
+  } else {
+    await sessionManager.addIteration(context.sessionId, iterationResult);
+    await sessionManager.updateBestResult(
+      context.sessionId,
+      context.iteration,
+      scoreResult.score
+    );
 
-  await sessionManager.updateBestResult(
-    context.sessionId,
-    context.iteration,
-    scoreResult.score
-  );
+    const updatedSession = await sessionManager.loadSession(context.sessionId);
+    if (!updatedSession) {
+      return;
+    }
 
-  const updatedSession = await sessionManager.loadSession(context.sessionId);
-  if (!updatedSession) {
-    return;
-  }
-
-  const eligibility = checkMergeEligibility(updatedSession, iterationResult);
-  if (eligibility.canMerge) {
-    await sessionManager.updateSessionStatus(context.sessionId, "completed");
+    const eligibility = checkMergeEligibility(updatedSession, iterationResult);
+    if (eligibility.canMerge) {
+      await sessionManager.updateSessionStatus(context.sessionId, "completed");
+    }
   }
 }
 
@@ -413,15 +428,34 @@ async function updateDirectivePhase(
 
   const directiveWriter = new DirectiveWriter();
   const updatedSession = await sessionManager.loadSession(context.sessionId);
-  const latestIteration = await sessionManager.getLatestIteration(
-    context.sessionId
-  );
 
-  if (!(latestIteration && updatedSession)) {
+  if (!updatedSession) {
     return;
   }
 
-  const history: IterationSummary[] = updatedSession.iterations
+  let latestIteration: IterationResult | null = null;
+  let iterations: IterationResult[] = [];
+
+  if (context.expertId !== undefined && updatedSession.experts) {
+    const expert = updatedSession.experts.find(
+      (e) => e.id === context.expertId
+    );
+    if (expert) {
+      iterations = expert.iterations;
+      latestIteration = iterations.at(-1) ?? null;
+    }
+  } else {
+    iterations = updatedSession.iterations;
+    latestIteration = await sessionManager.getLatestIteration(
+      context.sessionId
+    );
+  }
+
+  if (!latestIteration) {
+    return;
+  }
+
+  const history: IterationSummary[] = iterations
     .filter((iter) => iter.testResults && iter.score !== undefined)
     .map((iter) => ({
       iteration: iter.iteration,
@@ -431,7 +465,7 @@ async function updateDirectivePhase(
         : "No test results",
     }));
 
-  const priorSolutions: SolutionMemory[] = updatedSession.iterations
+  const priorSolutions: SolutionMemory[] = iterations
     .filter((iter) => iter.solution !== undefined)
     .map((iter) => iter.solution as SolutionMemory);
 
@@ -446,15 +480,23 @@ async function updateDirectivePhase(
   });
   const specHints = detectSpecFiles();
 
-  await directiveWriter.write({
-    session: updatedSession,
-    latestIteration,
-    nextActions,
-    history: history.length > 0 ? history : undefined,
-    specHints: specHints.length > 0 ? specHints : undefined,
-    qualityAnalysis,
-    priorSolutions: priorSolutions.length > 0 ? priorSolutions : undefined,
-  });
+  await directiveWriter.write(
+    {
+      session: updatedSession,
+      latestIteration,
+      nextActions,
+      history: history.length > 0 ? history : undefined,
+      specHints: specHints.length > 0 ? specHints : undefined,
+      qualityAnalysis,
+      priorSolutions: priorSolutions.length > 0 ? priorSolutions : undefined,
+      workingDirectory: context.worktreePath,
+    },
+    context.expertId
+  );
+
+  if (updatedSession.mode === "parallel") {
+    await directiveWriter.writeRaceSummary(updatedSession);
+  }
 }
 
 function selectMinimalDiffWinner(
@@ -517,11 +559,180 @@ function detectSpecFiles(cwd: string = process.cwd()): string[] {
   return found;
 }
 
+async function createSingleExpertSession(
+  session: RefinementSession,
+  worktreeManager: WorktreeManager,
+  directiveWriter: DirectiveWriter,
+  specHints: string[]
+): Promise<ToolResponse> {
+  const branchName = `finsliparn/${session.id}/iteration-1`;
+  let worktreePath: string;
+  try {
+    worktreePath = await worktreeManager.createWorktree(branchName);
+    log.info("Worktree created for new session", {
+      sessionId: session.id,
+      worktreePath,
+    });
+  } catch (error) {
+    log.error("Failed to create initial worktree", {
+      sessionId: session.id,
+      error: String(error),
+    });
+    return {
+      success: false,
+      message: `Failed to create worktree: ${error}`,
+      error: {
+        code: "WORKTREE_CREATION_FAILED",
+        details: String(error),
+      },
+    };
+  }
+
+  await directiveWriter.write({
+    session,
+    latestIteration: {
+      iteration: 1,
+      status: "pending",
+      timestamp: new Date(),
+      score: 0,
+      worktreePath,
+    },
+    nextActions: [
+      `Implement the task: ${session.taskDescription}`,
+      "Then call finslipa_check to validate with tests",
+    ],
+    specHints: specHints.length > 0 ? specHints : undefined,
+    workingDirectory: worktreePath,
+  });
+
+  return {
+    success: true,
+    message: `Session ${session.id} created`,
+    data: {
+      sessionId: session.id,
+      taskDescription: session.taskDescription,
+      workingDirectory: worktreePath,
+    },
+    nextSteps: [
+      `Make your code changes in: ${worktreePath}`,
+      "Call finslipa_check to run tests and get feedback",
+    ],
+  };
+}
+
+type ParallelSessionContext = {
+  session: RefinementSession;
+  sessionManager: SessionManager;
+  worktreeManager: WorktreeManager;
+  directiveWriter: DirectiveWriter;
+  specHints: string[];
+  expertCount: number;
+};
+
+async function createParallelExpertSession(
+  ctx: ParallelSessionContext
+): Promise<ToolResponse> {
+  const {
+    session,
+    sessionManager,
+    worktreeManager,
+    directiveWriter,
+    specHints,
+    expertCount,
+  } = ctx;
+  const baseSeed = Math.floor(Math.random() * 1_000_000);
+  await sessionManager.initializeExperts(session.id, expertCount, baseSeed);
+
+  const workingDirectories: string[] = [];
+  const expertErrors: string[] = [];
+
+  for (let expertId = 0; expertId < expertCount; expertId++) {
+    try {
+      const worktreePath = await worktreeManager.createExpertWorktree(
+        session.id,
+        expertId,
+        1
+      );
+      workingDirectories.push(worktreePath);
+
+      const expert = await sessionManager.getExpert(session.id, expertId);
+      await directiveWriter.write(
+        {
+          session: { ...session, mode: "parallel", expertCount, baseSeed },
+          latestIteration: {
+            iteration: 1,
+            status: "pending",
+            timestamp: new Date(),
+            score: 0,
+            worktreePath,
+            expertId,
+          },
+          nextActions: [
+            `Implement the task: ${session.taskDescription}`,
+            "Then call finslipa_check to validate with tests",
+          ],
+          specHints: specHints.length > 0 ? specHints : undefined,
+          workingDirectory: worktreePath,
+        },
+        expertId
+      );
+
+      log.info("Expert worktree created", {
+        sessionId: session.id,
+        expertId,
+        seed: expert?.seed,
+        worktreePath,
+      });
+    } catch (error) {
+      expertErrors.push(`Expert ${expertId}: ${error}`);
+      log.error("Failed to create expert worktree", {
+        sessionId: session.id,
+        expertId,
+        error: String(error),
+      });
+    }
+  }
+
+  if (workingDirectories.length === 0) {
+    return {
+      success: false,
+      message: "Failed to create any expert worktrees",
+      error: {
+        code: "EXPERT_CREATION_FAILED",
+        details: expertErrors.join("; "),
+      },
+    };
+  }
+
+  await directiveWriter.writeRaceSummary(
+    (await sessionManager.loadSession(session.id)) as RefinementSession
+  );
+
+  return {
+    success: true,
+    message: `Session ${session.id} created with ${workingDirectories.length} experts`,
+    data: {
+      sessionId: session.id,
+      taskDescription: session.taskDescription,
+      mode: "parallel",
+      expertCount: workingDirectories.length,
+      workingDirectories,
+      errors: expertErrors.length > 0 ? expertErrors : undefined,
+    },
+    nextSteps: [
+      `${workingDirectories.length} expert worktrees created`,
+      "Use Task tool to spawn parallel agents, each working in a different worktree",
+      "Each agent should call finslipa_check to run tests and iterate",
+    ],
+  };
+}
+
 export async function finslipaStart(args: {
   taskDescription: string;
   maxIterations?: number;
   forceNew?: boolean;
-  mergeThreshold?: number; // Score threshold for merge (undefined = no protection)
+  mergeThreshold?: number;
+  expertCount?: number;
 }): Promise<ToolResponse> {
   const sessionManager = new SessionManager();
 
@@ -550,71 +761,34 @@ export async function finslipaStart(args: {
       }
     }
 
+    const expertCount = args.expertCount ?? 1;
     const session = await sessionManager.createSession(args.taskDescription, {
       maxIterations: args.maxIterations || 5,
       mergeThreshold: args.mergeThreshold,
+      expertCount,
     });
 
-    // Create worktree for iteration 1 upfront so LLM works in isolated environment
     const worktreeManager = new WorktreeManager();
-    const branchName = `finsliparn/${session.id}/iteration-1`;
-    let worktreePath: string;
-    try {
-      worktreePath = await worktreeManager.createWorktree(branchName);
-      log.info("Worktree created for new session", {
-        sessionId: session.id,
-        worktreePath,
-      });
-    } catch (error) {
-      log.error("Failed to create initial worktree", {
-        sessionId: session.id,
-        error: String(error),
-      });
-      return {
-        success: false,
-        message: `Failed to create worktree: ${error}`,
-        error: {
-          code: "WORKTREE_CREATION_FAILED",
-          details: String(error),
-        },
-      };
-    }
-
-    // Detect spec files for context
+    const directiveWriter = new DirectiveWriter();
     const specHints = detectSpecFiles();
 
-    // Initialize directive with working directory
-    const directiveWriter = new DirectiveWriter();
-    await directiveWriter.write({
-      session,
-      latestIteration: {
-        iteration: 1,
-        status: "pending",
-        timestamp: new Date(),
-        score: 0,
-        worktreePath,
-      },
-      nextActions: [
-        `Implement the task: ${args.taskDescription}`,
-        "Then call finslipa_check to validate with tests",
-      ],
-      specHints: specHints.length > 0 ? specHints : undefined,
-      workingDirectory: worktreePath,
-    });
+    if (expertCount > 1) {
+      return createParallelExpertSession({
+        session,
+        sessionManager,
+        worktreeManager,
+        directiveWriter,
+        specHints,
+        expertCount,
+      });
+    }
 
-    return {
-      success: true,
-      message: `Session ${session.id} created`,
-      data: {
-        sessionId: session.id,
-        taskDescription: session.taskDescription,
-        workingDirectory: worktreePath,
-      },
-      nextSteps: [
-        `Make your code changes in: ${worktreePath}`,
-        "Call finslipa_check to run tests and get feedback",
-      ],
-    };
+    return createSingleExpertSession(
+      session,
+      worktreeManager,
+      directiveWriter,
+      specHints
+    );
   } catch (error) {
     return {
       success: false,
@@ -655,6 +829,135 @@ function getIterationBaseBranch(sessionId: string, iteration: number): string {
   return iteration > 1
     ? `finsliparn/${sessionId}/iteration-${iteration - 1}`
     : "main";
+}
+
+function getExpertIterationBaseBranch(
+  sessionId: string,
+  expertId: number,
+  iteration: number
+): string {
+  return iteration > 1
+    ? `finsliparn/${sessionId}/expert-${expertId}/iteration-${iteration - 1}`
+    : "main";
+}
+
+type WorktreeSetupResult = {
+  workingDirectory: string;
+  worktreePath?: string;
+};
+
+async function setupExpertWorktree(
+  worktreeManager: WorktreeManager,
+  sessionId: string,
+  expertId: number,
+  iteration: number
+): Promise<WorktreeSetupResult | ToolResponse> {
+  const baseBranch = getExpertIterationBaseBranch(
+    sessionId,
+    expertId,
+    iteration
+  );
+  try {
+    const worktreePath = await worktreeManager.createExpertWorktree(
+      sessionId,
+      expertId,
+      iteration,
+      baseBranch
+    );
+    return { workingDirectory: worktreePath, worktreePath };
+  } catch (error) {
+    return {
+      success: false,
+      message: `Failed to create expert worktree: ${error}`,
+      error: {
+        code: "WORKTREE_CREATION_FAILED",
+        details: String(error),
+      },
+    };
+  }
+}
+
+function setupSingleWorktree(
+  worktreeManager: WorktreeManager,
+  sessionId: string,
+  iteration: number
+): Promise<WorktreeSetupResult | ToolResponse> {
+  const baseBranch = getIterationBaseBranch(sessionId, iteration);
+  return setupWorktree(worktreeManager, sessionId, iteration, baseBranch);
+}
+
+type IterationInfo = {
+  iteration: number;
+  expertId?: number;
+  isParallelMode: boolean;
+};
+
+async function determineIterationInfo(
+  session: RefinementSession,
+  sessionManager: SessionManager,
+  worktreeManager: WorktreeManager,
+  cwd: string
+): Promise<IterationInfo> {
+  const expertInfo = worktreeManager.detectExpertFromPath(cwd);
+  const isParallelMode = session.mode === "parallel" && expertInfo !== null;
+
+  if (isParallelMode && expertInfo) {
+    const expert = await sessionManager.getExpert(
+      session.id,
+      expertInfo.expertId
+    );
+    return {
+      iteration: (expert?.currentIteration ?? 0) + 1,
+      expertId: expertInfo.expertId,
+      isParallelMode: true,
+    };
+  }
+
+  return {
+    iteration: session.currentIteration + 1,
+    isParallelMode: false,
+  };
+}
+
+async function executeCheckPhases(
+  sessionManager: SessionManager,
+  context: CheckContext,
+  session: RefinementSession
+): Promise<ToolResponse> {
+  const testPhaseResult = await runTestPhase(context);
+  if (isToolResponse(testPhaseResult)) {
+    return testPhaseResult;
+  }
+
+  const analysisResult = runAnalysisPhase(testPhaseResult);
+
+  const noChangesError = validateChangesExist(testPhaseResult.diffAnalysis);
+  if (noChangesError) {
+    return noChangesError;
+  }
+
+  await persistIterationPhase(
+    sessionManager,
+    context,
+    testPhaseResult,
+    analysisResult
+  );
+  await updateDirectivePhase(
+    sessionManager,
+    context,
+    testPhaseResult,
+    analysisResult
+  );
+
+  return buildCheckSuccessResponse({
+    sessionManager,
+    sessionId: context.sessionId,
+    iteration: context.iteration,
+    maxIterations: session.maxIterations,
+    testPhaseResult,
+    analysisResult,
+    expertId: context.expertId,
+  });
 }
 
 async function validateAndPrepareSession(
@@ -701,12 +1004,13 @@ type CheckSuccessContext = {
   maxIterations: number;
   testPhaseResult: TestPhaseResult;
   analysisResult: AnalysisPhaseResult;
+  expertId?: number;
 };
 
 async function buildCheckSuccessResponse(
   ctx: CheckSuccessContext
 ): Promise<ToolResponse> {
-  const { sessionManager, sessionId, iteration, maxIterations } = ctx;
+  const { sessionManager, sessionId, iteration, maxIterations, expertId } = ctx;
   const { testPhaseResult, analysisResult } = ctx;
 
   const updatedSession = await sessionManager.loadSession(sessionId);
@@ -722,9 +1026,14 @@ async function buildCheckSuccessResponse(
     : undefined;
   const remainingIterations = maxIterations - iteration;
 
+  const message =
+    expertId !== undefined
+      ? `Expert ${expertId} iteration ${iteration} completed`
+      : `Iteration ${iteration} completed`;
+
   return {
     success: true,
-    message: `Iteration ${iteration} completed`,
+    message,
     data: {
       passed: testPhaseResult.testResults.passed,
       failed: testPhaseResult.testResults.failed,
@@ -737,6 +1046,8 @@ async function buildCheckSuccessResponse(
       mergeReason: mergeEligibility?.reason,
       scorePlateau: plateau?.detected ?? false,
       plateauIterations: plateau?.stagnantIterations,
+      expertId,
+      mode: updatedSession?.mode,
     },
     nextSteps: buildNextSteps({
       testResults: testPhaseResult.testResults,
@@ -747,6 +1058,35 @@ async function buildCheckSuccessResponse(
       latestIteration: latestIteration ?? undefined,
     }),
   };
+}
+
+type CheckWorktreeParams = {
+  worktreeManager: WorktreeManager;
+  session: RefinementSession;
+  iterInfo: IterationInfo;
+  useWorktree: boolean;
+  cwd: string;
+};
+
+function setupCheckWorktree(
+  params: CheckWorktreeParams
+): Promise<{ workingDirectory: string; worktreePath?: string } | ToolResponse> {
+  const { worktreeManager, session, iterInfo, useWorktree, cwd } = params;
+
+  if (!useWorktree) {
+    return Promise.resolve({ workingDirectory: cwd });
+  }
+
+  if (iterInfo.isParallelMode && iterInfo.expertId !== undefined) {
+    return setupExpertWorktree(
+      worktreeManager,
+      session.id,
+      iterInfo.expertId,
+      iterInfo.iteration
+    );
+  }
+
+  return setupSingleWorktree(worktreeManager, session.id, iterInfo.iteration);
 }
 
 export async function finslipaCheck(args: {
@@ -769,72 +1109,35 @@ export async function finslipaCheck(args: {
 
       await sessionManager.updateSessionStatus(args.sessionId, "iterating");
 
-      const iteration = session.currentIteration + 1;
-      let workingDirectory = process.cwd();
-      let worktreePath: string | undefined;
+      const cwd = process.cwd();
+      const iterInfo = await determineIterationInfo(
+        session,
+        sessionManager,
+        worktreeManager,
+        cwd
+      );
 
-      if (args.useWorktree ?? true) {
-        // Base new iterations on previous iteration's branch to carry forward changes
-        const baseBranch = getIterationBaseBranch(session.id, iteration);
-
-        const worktreeResult = await setupWorktree(
-          worktreeManager,
-          session.id,
-          iteration,
-          baseBranch
-        );
-        if (isToolResponse(worktreeResult)) {
-          return worktreeResult;
-        }
-        workingDirectory = worktreeResult.workingDirectory;
-        worktreePath = worktreeResult.worktreePath;
+      const worktreeResult = await setupCheckWorktree({
+        worktreeManager,
+        session,
+        iterInfo,
+        useWorktree: args.useWorktree ?? true,
+        cwd,
+      });
+      if (isToolResponse(worktreeResult)) {
+        return worktreeResult;
       }
 
       const context: CheckContext = {
         sessionId: args.sessionId,
-        iteration,
-        workingDirectory,
-        worktreePath,
+        iteration: iterInfo.iteration,
+        workingDirectory: worktreeResult.workingDirectory,
+        worktreePath: worktreeResult.worktreePath,
+        expertId: iterInfo.expertId,
       };
 
       try {
-        const testPhaseResult = await runTestPhase(context);
-        if (isToolResponse(testPhaseResult)) {
-          return testPhaseResult;
-        }
-
-        const analysisResult = runAnalysisPhase(testPhaseResult);
-
-        // Validate that actual changes exist before counting iteration
-        const noChangesError = validateChangesExist(
-          testPhaseResult.diffAnalysis
-        );
-        if (noChangesError) {
-          return noChangesError;
-        }
-
-        await persistIterationPhase(
-          sessionManager,
-          context,
-          testPhaseResult,
-          analysisResult
-        );
-
-        await updateDirectivePhase(
-          sessionManager,
-          context,
-          testPhaseResult,
-          analysisResult
-        );
-
-        return buildCheckSuccessResponse({
-          sessionManager,
-          sessionId: args.sessionId,
-          iteration,
-          maxIterations: session.maxIterations,
-          testPhaseResult,
-          analysisResult,
-        });
+        return await executeCheckPhases(sessionManager, context, session);
       } catch (testError) {
         log.error("Test run failed", {
           sessionId: args.sessionId,
@@ -907,10 +1210,158 @@ export async function finslipaStatus(args: {
   }
 }
 
+async function voteParallelMode(
+  session: RefinementSession,
+  sessionManager: SessionManager
+): Promise<ToolResponse> {
+  if (!session.experts || session.experts.length === 0) {
+    return {
+      success: false,
+      message: "No experts found in parallel session",
+      error: {
+        code: "NO_EXPERTS",
+        details: "Parallel session has no expert state",
+      },
+    };
+  }
+
+  const expertsWithScores = session.experts.filter(
+    (e) => e.bestScore !== undefined
+  );
+
+  if (expertsWithScores.length === 0) {
+    return {
+      success: false,
+      message: "No experts have completed iterations with scores",
+      error: {
+        code: "NO_SCORED_EXPERTS",
+        details: "At least one expert must complete an iteration before voting",
+      },
+    };
+  }
+
+  const winningExpert = expertsWithScores.reduce((best, current) =>
+    (current.bestScore ?? 0) > (best.bestScore ?? 0) ? current : best
+  );
+
+  const updatedSession = await sessionManager.loadSession(session.id);
+  if (updatedSession) {
+    updatedSession.selectedExpertId = winningExpert.id;
+    updatedSession.selectedIteration = winningExpert.bestIteration;
+    updatedSession.status = "evaluating";
+    await sessionManager.persistSession(updatedSession);
+
+    const directiveWriter = new DirectiveWriter();
+    await directiveWriter.writeRaceSummary(updatedSession);
+  }
+
+  return {
+    success: true,
+    message: `Selected expert ${winningExpert.id} iteration ${winningExpert.bestIteration} with score ${winningExpert.bestScore}`,
+    data: {
+      selectedExpertId: winningExpert.id,
+      selectedIteration: winningExpert.bestIteration,
+      score: winningExpert.bestScore,
+      strategy: "highest_score",
+      totalExperts: session.experts.length,
+      expertsWithScores: expertsWithScores.length,
+    },
+    nextSteps: [
+      `Call finslipa_merge to merge expert ${winningExpert.id} iteration ${winningExpert.bestIteration}`,
+    ],
+  };
+}
+
+async function voteSingleMode(
+  session: RefinementSession,
+  sessionManager: SessionManager,
+  strategy: "highest_score" | "minimal_diff" | "balanced",
+  returnBest: boolean
+): Promise<ToolResponse> {
+  if (session.iterations.length === 0) {
+    return {
+      success: false,
+      message: "No iterations to vote on",
+      error: {
+        code: "NO_ITERATIONS",
+        details: "Run finslipa_check first to create iterations",
+      },
+    };
+  }
+
+  if (returnBest && session.bestIteration !== undefined) {
+    await sessionManager.updateSessionStatus(session.id, "evaluating");
+    return {
+      success: true,
+      message: `Returning best tracked iteration ${session.bestIteration} with score ${session.bestScore}`,
+      data: {
+        selectedIteration: session.bestIteration,
+        score: session.bestScore,
+        strategy: "best_tracked",
+        totalIterations: session.iterations.length,
+      },
+      nextSteps: [
+        `Call finslipa_merge to merge iteration ${session.bestIteration}`,
+      ],
+    };
+  }
+
+  const completedIterations = session.iterations.filter(
+    (iteration) =>
+      iteration.status === "completed" && iteration.score !== undefined
+  );
+
+  if (completedIterations.length === 0) {
+    return {
+      success: false,
+      message: "No completed iterations with scores",
+      error: {
+        code: "NO_SCORED_ITERATIONS",
+        details: "All iterations must complete before voting",
+      },
+    };
+  }
+
+  const passingIterations = completedIterations.filter(
+    (iter) => iter.score === 100
+  );
+
+  let winner: IterationResult;
+  if (strategy === "highest_score") {
+    winner = completedIterations.reduce((best, current) =>
+      (current.score ?? 0) > (best.score ?? 0) ? current : best
+    );
+  } else if (strategy === "minimal_diff") {
+    winner = selectMinimalDiffWinner(completedIterations, passingIterations);
+    if (passingIterations.length === 0) {
+      log.warn(
+        "minimal_diff: No passing iterations, falling back to smallest diff among all",
+        { totalIterations: completedIterations.length }
+      );
+    }
+  } else {
+    winner = selectBalancedWinner(completedIterations);
+  }
+
+  await sessionManager.updateSessionStatus(session.id, "evaluating");
+
+  return {
+    success: true,
+    message: `Selected iteration ${winner.iteration} with score ${winner.score}`,
+    data: {
+      selectedIteration: winner.iteration,
+      score: winner.score,
+      strategy,
+      totalIterations: completedIterations.length,
+    },
+    nextSteps: [`Call finslipa_merge to merge iteration ${winner.iteration}`],
+  };
+}
+
 export async function finslipaVote(args: {
   sessionId: string;
   strategy?: "highest_score" | "minimal_diff" | "balanced";
-  returnBest?: boolean; // Return tracked best result instead of voting
+  returnBest?: boolean;
 }): Promise<ToolResponse> {
   const sessionManager = new SessionManager();
   const strategy = args.strategy ?? "highest_score";
@@ -928,88 +1379,16 @@ export async function finslipaVote(args: {
       };
     }
 
-    if (session.iterations.length === 0) {
-      return {
-        success: false,
-        message: "No iterations to vote on",
-        error: {
-          code: "NO_ITERATIONS",
-          details: "Run finslipa_check first to create iterations",
-        },
-      };
+    if (session.mode === "parallel") {
+      return voteParallelMode(session, sessionManager);
     }
 
-    // Return tracked best if requested and available
-    if (args.returnBest && session.bestIteration !== undefined) {
-      await sessionManager.updateSessionStatus(args.sessionId, "evaluating");
-      return {
-        success: true,
-        message: `Returning best tracked iteration ${session.bestIteration} with score ${session.bestScore}`,
-        data: {
-          selectedIteration: session.bestIteration,
-          score: session.bestScore,
-          strategy: "best_tracked",
-          totalIterations: session.iterations.length,
-        },
-        nextSteps: [
-          `Call finslipa_merge to merge iteration ${session.bestIteration}`,
-        ],
-      };
-    }
-
-    const completedIterations = session.iterations.filter(
-      (iteration) =>
-        iteration.status === "completed" && iteration.score !== undefined
+    return voteSingleMode(
+      session,
+      sessionManager,
+      strategy,
+      args.returnBest ?? false
     );
-
-    if (completedIterations.length === 0) {
-      return {
-        success: false,
-        message: "No completed iterations with scores",
-        error: {
-          code: "NO_SCORED_ITERATIONS",
-          details: "All iterations must complete before voting",
-        },
-      };
-    }
-
-    // Select winner based on strategy
-    const passingIterations = completedIterations.filter(
-      (iter) => iter.score === 100
-    );
-
-    let winner: IterationResult;
-    if (strategy === "highest_score") {
-      winner = completedIterations.reduce((best, current) =>
-        (current.score ?? 0) > (best.score ?? 0) ? current : best
-      );
-    } else if (strategy === "minimal_diff") {
-      winner = selectMinimalDiffWinner(completedIterations, passingIterations);
-      if (passingIterations.length === 0) {
-        log.warn(
-          "minimal_diff: No passing iterations, falling back to smallest diff among all",
-          {
-            totalIterations: completedIterations.length,
-          }
-        );
-      }
-    } else {
-      winner = selectBalancedWinner(completedIterations);
-    }
-
-    await sessionManager.updateSessionStatus(args.sessionId, "evaluating");
-
-    return {
-      success: true,
-      message: `Selected iteration ${winner.iteration} with score ${winner.score}`,
-      data: {
-        selectedIteration: winner.iteration,
-        score: winner.score,
-        strategy,
-        totalIterations: completedIterations.length,
-      },
-      nextSteps: [`Call finslipa_merge to merge iteration ${winner.iteration}`],
-    };
   } catch (error) {
     return {
       success: false,
@@ -1148,6 +1527,246 @@ async function commitWorktreeChanges(
   return true;
 }
 
+async function cleanupAllExpertWorktrees(
+  worktreeManager: WorktreeManager,
+  session: RefinementSession
+): Promise<number> {
+  if (!session.experts) {
+    return 0;
+  }
+
+  let cleanedCount = 0;
+  for (const expert of session.experts) {
+    for (const iteration of expert.iterations) {
+      if (iteration.worktreePath) {
+        const branchName = `finsliparn/${session.id}/expert-${expert.id}/iteration-${iteration.iteration}`;
+        try {
+          await worktreeManager.deleteWorktree(branchName);
+          cleanedCount += 1;
+        } catch (error) {
+          log.warn("Failed to clean expert worktree", {
+            sessionId: session.id,
+            expertId: expert.id,
+            iteration: iteration.iteration,
+            error: String(error),
+          });
+        }
+      }
+    }
+  }
+  return cleanedCount;
+}
+
+async function mergeParallelSession(
+  session: RefinementSession,
+  sessionManager: SessionManager,
+  worktreeManager: WorktreeManager
+): Promise<ToolResponse> {
+  const expertId = session.selectedExpertId;
+  const targetIteration = session.selectedIteration;
+
+  if (expertId === undefined || targetIteration === undefined) {
+    return {
+      success: false,
+      message: "No expert or iteration selected. Run finslipa_vote first.",
+      error: {
+        code: "NO_SELECTION",
+        details: "Call finslipa_vote before finslipa_merge in parallel mode",
+      },
+    };
+  }
+
+  const expert = session.experts?.find((e) => e.id === expertId);
+  if (!expert) {
+    return {
+      success: false,
+      message: `Expert ${expertId} not found`,
+      error: {
+        code: "EXPERT_NOT_FOUND",
+        details: `No expert with ID ${expertId} in session`,
+      },
+    };
+  }
+
+  const iteration = expert.iterations.find(
+    (i) => i.iteration === targetIteration
+  );
+  if (!iteration) {
+    return {
+      success: false,
+      message: `Iteration ${targetIteration} not found for expert ${expertId}`,
+      error: {
+        code: "ITERATION_NOT_FOUND",
+        details: `No iteration ${targetIteration} in expert ${expertId}`,
+      },
+    };
+  }
+
+  const threshold = session.mergeThreshold;
+  if (threshold !== undefined && (iteration.score ?? 0) < threshold) {
+    return {
+      success: false,
+      message: `Cannot merge iteration with score ${iteration.score}. Minimum required: ${threshold}%.`,
+      error: {
+        code: "SCORE_BELOW_THRESHOLD",
+        details: `Score ${iteration.score}% is below the merge threshold of ${threshold}%`,
+      },
+    };
+  }
+
+  let mergeResult: string | undefined;
+  if (iteration.worktreePath) {
+    const git = simpleGit(process.cwd());
+    const branchName = `finsliparn/${session.id}/expert-${expertId}/iteration-${targetIteration}`;
+
+    try {
+      await commitWorktreeChanges(
+        iteration.worktreePath,
+        session.id,
+        targetIteration,
+        iteration.score
+      );
+
+      await git.merge([branchName, "--no-commit", "--no-ff"]);
+      mergeResult = `Staged changes from branch ${branchName}`;
+    } catch (error) {
+      return {
+        success: false,
+        message: `Git merge failed: ${error}`,
+        error: {
+          code: "GIT_MERGE_FAILED",
+          details: String(error),
+        },
+      };
+    }
+  }
+
+  const cleanedWorktrees = await cleanupAllExpertWorktrees(
+    worktreeManager,
+    session
+  );
+
+  await sessionManager.updateSessionStatus(session.id, "completed");
+
+  return {
+    success: true,
+    message: `Session ${session.id} changes staged for review (expert ${expertId})`,
+    data: {
+      sessionId: session.id,
+      mergedExpertId: expertId,
+      mergedIteration: targetIteration,
+      finalScore: iteration.score,
+      mergeResult,
+      worktreesCleaned: cleanedWorktrees,
+    },
+    nextSteps: [
+      "Changes are staged but NOT committed - review with `git diff --staged`",
+      `Commit when ready: git commit -m "Merge finsliparn expert ${expertId} iteration ${targetIteration} (score: ${iteration.score})"`,
+    ],
+  };
+}
+
+async function mergeSingleSession(
+  session: RefinementSession,
+  sessionManager: SessionManager,
+  worktreeManager: WorktreeManager,
+  targetIteration: number
+): Promise<ToolResponse> {
+  const iteration = session.iterations.find(
+    (i) => i.iteration === targetIteration
+  );
+
+  if (!iteration) {
+    return {
+      success: false,
+      message: `Iteration ${targetIteration} not found`,
+      error: {
+        code: "ITERATION_NOT_FOUND",
+        details: `No iteration ${targetIteration} in session`,
+      },
+    };
+  }
+
+  const completedIterations = session.iterations.filter(
+    (iter) => iter.status === "completed" && iter.score !== undefined
+  );
+
+  const isPerfectScore =
+    iteration.score === 100 &&
+    iteration.testResults?.failed === 0 &&
+    (iteration.testResults?.passed ?? 0) > 0;
+
+  if (completedIterations.length < 2 && !isPerfectScore) {
+    return {
+      success: false,
+      message: `Cannot merge with only ${completedIterations.length} completed iteration(s). At least 2 are required for comparison (unless perfect score).`,
+      error: {
+        code: "INSUFFICIENT_ITERATIONS",
+        details:
+          "Complete at least 2 iterations before merging to ensure meaningful comparison, or achieve a perfect score (100%, all tests pass)",
+      },
+    };
+  }
+
+  const threshold = session.mergeThreshold;
+  if (threshold !== undefined && (iteration.score ?? 0) < threshold) {
+    return {
+      success: false,
+      message: `Cannot merge iteration with score ${iteration.score}. Minimum required: ${threshold}%.`,
+      error: {
+        code: "SCORE_BELOW_THRESHOLD",
+        details: `Score ${iteration.score}% is below the merge threshold of ${threshold}%`,
+      },
+    };
+  }
+
+  let mergeResult: string | undefined;
+  if (iteration.worktreePath) {
+    const git = simpleGit(process.cwd());
+    const branchName = `finsliparn/${session.id}/iteration-${targetIteration}`;
+
+    try {
+      await commitWorktreeChanges(
+        iteration.worktreePath,
+        session.id,
+        targetIteration,
+        iteration.score
+      );
+
+      await git.merge([branchName, "--no-commit", "--no-ff"]);
+      mergeResult = `Staged changes from branch ${branchName}`;
+
+      await worktreeManager.deleteWorktree(branchName);
+    } catch (error) {
+      return {
+        success: false,
+        message: `Git merge failed: ${error}`,
+        error: {
+          code: "GIT_MERGE_FAILED",
+          details: String(error),
+        },
+      };
+    }
+  }
+
+  await sessionManager.updateSessionStatus(session.id, "completed");
+
+  return {
+    success: true,
+    message: `Session ${session.id} changes staged for review`,
+    data: {
+      sessionId: session.id,
+      mergedIteration: targetIteration,
+      finalScore: iteration.score,
+      mergeResult,
+    },
+    nextSteps: [
+      "Changes are staged but NOT committed - review with `git diff --staged`",
+      `Commit when ready: git commit -m "Merge finsliparn iteration ${targetIteration} (score: ${iteration.score})"`,
+    ],
+  };
+}
+
 export async function finslipaMerge(args: {
   sessionId: string;
   iterationNumber?: number;
@@ -1168,110 +1787,21 @@ export async function finslipaMerge(args: {
       };
     }
 
+    if (session.mode === "parallel") {
+      return mergeParallelSession(session, sessionManager, worktreeManager);
+    }
+
     const targetIteration =
       args.iterationNumber ??
       session.selectedIteration ??
       session.currentIteration;
 
-    const iteration = session.iterations.find(
-      (i) => i.iteration === targetIteration
+    return mergeSingleSession(
+      session,
+      sessionManager,
+      worktreeManager,
+      targetIteration
     );
-
-    if (!iteration) {
-      return {
-        success: false,
-        message: `Iteration ${targetIteration} not found`,
-        error: {
-          code: "ITERATION_NOT_FOUND",
-          details: `No iteration ${targetIteration} in session`,
-        },
-      };
-    }
-
-    const completedIterations = session.iterations.filter(
-      (iter) => iter.status === "completed" && iter.score !== undefined
-    );
-
-    // Allow early exit on perfect score (100% score, all tests pass, at least one test ran)
-    const isPerfectScore =
-      iteration.score === 100 &&
-      iteration.testResults?.failed === 0 &&
-      (iteration.testResults?.passed ?? 0) > 0;
-
-    if (completedIterations.length < 2 && !isPerfectScore) {
-      return {
-        success: false,
-        message: `Cannot merge with only ${completedIterations.length} completed iteration(s). At least 2 are required for comparison (unless perfect score).`,
-        error: {
-          code: "INSUFFICIENT_ITERATIONS",
-          details:
-            "Complete at least 2 iterations before merging to ensure meaningful comparison, or achieve a perfect score (100%, all tests pass)",
-        },
-      };
-    }
-
-    // Check merge threshold if configured (undefined means disabled)
-    const threshold = session.mergeThreshold;
-    if (threshold !== undefined && (iteration.score ?? 0) < threshold) {
-      return {
-        success: false,
-        message: `Cannot merge iteration with score ${iteration.score}. Minimum required: ${threshold}%.`,
-        error: {
-          code: "SCORE_BELOW_THRESHOLD",
-          details: `Score ${iteration.score}% is below the merge threshold of ${threshold}%`,
-        },
-      };
-    }
-
-    // Stage changes from worktree without committing
-    let mergeResult: string | undefined;
-    if (iteration.worktreePath) {
-      const git = simpleGit(process.cwd());
-      const branchName = `finsliparn/${session.id}/iteration-${targetIteration}`;
-
-      try {
-        // Commit any uncommitted changes in the worktree first
-        await commitWorktreeChanges(
-          iteration.worktreePath,
-          session.id,
-          targetIteration,
-          iteration.score
-        );
-
-        // Merge the iteration branch into current branch without committing
-        await git.merge([branchName, "--no-commit", "--no-ff"]);
-        mergeResult = `Staged changes from branch ${branchName}`;
-
-        // Clean up the worktree
-        await worktreeManager.deleteWorktree(branchName);
-      } catch (error) {
-        return {
-          success: false,
-          message: `Git merge failed: ${error}`,
-          error: {
-            code: "GIT_MERGE_FAILED",
-            details: String(error),
-          },
-        };
-      }
-    }
-
-    await sessionManager.updateSessionStatus(args.sessionId, "completed");
-
-    return {
-      success: true,
-      message: `Session ${args.sessionId} changes staged for review`,
-      data: {
-        sessionId: args.sessionId,
-        mergedIteration: targetIteration,
-        finalScore: iteration.score,
-        mergeResult,
-      },
-      nextSteps: [
-        "Changes are staged but NOT committed - review with `git diff --staged`",
-        `Commit when ready: git commit -m "Merge finsliparn iteration ${targetIteration} (score: ${iteration.score})"`,
-      ],
-    };
   } catch (error) {
     return {
       success: false,
