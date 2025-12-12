@@ -36,36 +36,52 @@ See [docs/spec-cc.md](docs/spec-cc.md) for detailed technical specifications.
 - Expert ID auto-detected from worktree path
 - Seed formula: `baseSeed + expertId * maxIterations` (per Poetiq)
 - Race termination: all experts run to completion, vote at end
+- Expert count fixed at session start (no hot-joining)
+- MVP voting: `highest_score` only (cross-expert comparison)
+- Orchestration: Claude Code Task tool spawns parallel agents (not in Finsliparn codebase)
+
+### Implementation Order
+
+1. Types → 2. Worktree Manager → 3. Session Manager → 4. Directive Writer → 5. Tools
 
 ### Implementation
 
-- [ ] **Type Updates** (`src/types/index.ts`)
+- [ ] **Phase 1: Type Updates** (`src/types/index.ts`)
   - [ ] Add `mode: "single" | "parallel"` to `RefinementSession`
-  - [ ] Add `expertCount` and `experts` fields
-  - [ ] Add `ExpertState` type
-- [ ] **Session Manager** (`src/core/session-manager.ts`)
-  - [ ] Add `initializeExperts(count, baseSeed)` method
-  - [ ] Add `getExpert(expertId)` / `updateExpert(expertId, state)` methods
-  - [ ] Seed formula: `baseSeed + expertId * maxIterations`
-- [ ] **Worktree Manager** (`src/core/worktree-manager.ts`)
-  - [ ] Add `createExpertWorktree(sessionId, expertId, iteration)`
-  - [ ] Add `detectExpertFromPath(worktreePath)` → `{ expertId, iteration }`
+  - [ ] Add `expertCount`, `experts`, `selectedExpertId`, `baseSeed` fields
+  - [ ] Add `ExpertState` type with `id`, `seed`, `currentIteration`, `iterations[]`, `bestIteration`, `bestScore`, `status`
+  - [ ] Add `expertId?: number` to `IterationResult`
+- [ ] **Phase 2: Worktree Manager** (`src/core/worktree-manager.ts`)
+  - [ ] Add `createExpertWorktree(sessionId, expertId, iteration, baseBranch)`
+  - [ ] Add `detectExpertFromPath(worktreePath)` → `{ expertId, iteration } | null`
   - [ ] Update `listSessionWorktreePaths()` for 4-level nesting
-- [ ] **Directive Writer** (`src/core/directive-writer.ts`)
+- [ ] **Phase 3: Session Manager** (`src/core/session-manager.ts`)
+  - [ ] Add `initializeExperts(sessionId, count, baseSeed)` method
+  - [ ] Add `getExpert(sessionId, expertId)` / `updateExpert(sessionId, expertId, state)` methods
+  - [ ] Add `addIterationToExpert(sessionId, expertId, iteration)` method
+  - [ ] Seed formula: `baseSeed + expertId * maxIterations`
+  - [ ] Lock scope: per-expert in parallel mode (`{sessionId}:expert-{E}`)
+- [ ] **Phase 4: Directive Writer** (`src/core/directive-writer.ts`)
   - [ ] Add `writeForExpert(context, expertId)` method
   - [ ] Path logic: parallel → `sessions/{id}/directives/expert-{N}.md`
   - [ ] Add `writeRaceSummary(session)` for `race.md`
-- [ ] **Tool Updates** (`src/mcp/tools.ts`)
-  - [ ] `finslipa_start`: add `expertCount` parameter, create N worktrees/directives
-  - [ ] `finslipa_check`: auto-detect expert ID from cwd, scope to expert
-  - [ ] `finslipa_vote`: collect best from each expert, apply voting
-- [x] **Voting System**
-  - [x] Implement `finslipa_vote` logic
-  - [x] Strategies: `highest_score`, `minimal_diff`, `balanced`
-  - [ ] Consensus voting (group by identical outputs, count votes)
-  - [ ] Diversity-first ordering
-- [ ] **Dashboard**
-  - [ ] Simple local web UI to visualize the race between experts
+  - [ ] Update `write()` to delegate based on `session.mode`
+- [ ] **Phase 5: Tool Updates** (`src/mcp/tools.ts`)
+  - [ ] `finslipa_start`: add `expertCount` parameter (default: 1), create N worktrees/directives, return array of working directories
+  - [ ] `finslipa_check`: auto-detect expert ID from cwd, scope to expert's iteration counter and state
+  - [ ] `finslipa_vote`: collect best from each expert, apply `highest_score` cross-expert, set `selectedExpertId`, generate `race.md`
+  - [ ] `finslipa_merge`: use `selectedExpertId` to find correct branch, cleanup all expert worktrees
+
+### Voting System
+
+- [x] Single-expert voting: `highest_score`, `minimal_diff`, `balanced`
+- [ ] Cross-expert voting: `highest_score` (MVP)
+
+### Future Enhancements
+
+- [ ] Consensus voting (group by identical outputs, count votes)
+- [ ] Diversity-first ordering
+- [ ] Dashboard: local web UI to visualize race between experts
 
 ## Milestone: Packaging & Distribution
 
