@@ -16,9 +16,9 @@
 
 ## 1. Executive Summary
 
-Finsliparn is a **Bun-native MCP server and Claude Code plugin** that applies iterative refinement and voting-based solution selection to coding tasks, by adapting the philosophy and methodology from Poetiq's [ARC-AGI solver](https://poetiq.ai/posts/arcagi_verified/).
+Finsliparn is a **Bun-native MCP server and Claude Code plugin** that applies iterative refinement and voting-based solution selection to coding tasks, adapting the methodology from Poetiq's [ARC-AGI solver](https://poetiq.ai/posts/arcagi_verified/).
 
-**Core Value Proposition**: Transform single-attempt coding into a multi-attempt, test-validated refinement loop that produces higher-quality, more reliable solutions.
+**Core value**: Transform single-attempt coding into multi-attempt, test-validated refinement loops that produce higher-quality, more reliable solutions.
 
 ---
 
@@ -28,8 +28,8 @@ Finsliparn is a **Bun-native MCP server and Claude Code plugin** that applies it
 
 1. **Iterative Refinement**: Solutions improve through structured feedback loops, not single-shot attempts
 2. **Test-Driven Validation**: Test results are the objective truth—not diffs, not prompts, not opinions
-3. **State Persistence**: The filesystem (`directive.md`) is the single source of truth, enabling recovery and platform portability
-4. **Selection over Generation**: It is easier to select the best of N solutions than to generate one perfect solution
+3. **State Persistence**: Filesystem (`directive.md`) is the single source of truth, enabling recovery and platform portability
+4. **Selection over Generation**: Select best of N solutions rather than generate one perfect solution
 5. **Non-Destructive Exploration**: Git worktrees enable parallel work without conflicts
 
 ### 2.2 Key Design Decisions
@@ -180,9 +180,9 @@ interface SessionManager {
 }
 ```
 
-### 4.2 Directive Writer (The Control Plane)
+### 4.2 Directive Writer
 
-Responsible for generating the `directive.md` file that grounds the LLM.
+Generates `directive.md` that grounds the LLM.
 
 ```typescript
 interface DirectiveWriter {
@@ -215,32 +215,30 @@ interface DirectiveContext {
 
 ### 4.2.1 Spec File Auto-Detection
 
-Finsliparn automatically detects specification files to provide context hints in the directive. Detection uses case-insensitive filename matching:
+Case-insensitive filename matching in `.` and `docs/`:
 
 **Recognized base names**: `spec`, `roadmap`, `architecture`, `design`, `specification`
 
 **Matching rules**:
 
-- Exact match: `spec.md`, `ROADMAP.md`, `Architecture.MD`
-- Prefixed variants: `spec-cc.md`, `design-v2.md`, `specification-api.md`
+- Exact: `spec.md`, `ROADMAP.md`
+- Prefixed: `spec-cc.md`, `design-v2.md`
 
-**Search directories**: `.` (project root), `docs/`
-
-Detected files are included in the directive as hints for the LLM to review, not as strict validation requirements.
+Detected files are included as context hints, not validation requirements.
 
 ### 4.3 Iteration Counting
 
-**Important**: Iterations always increment regardless of whether code changes were made. This ensures:
+Iterations always increment regardless of code changes. This ensures:
 
-1. Seed diversity formula (`baseSeed + expertId * maxIterations`) produces predictable, unique seeds
-2. Experts run the full `maxIterations` attempts, maximizing exploration
+1. Seed diversity formula produces predictable, unique seeds
+2. Experts run full `maxIterations` attempts
 3. Early termination doesn't break cross-expert seed uniqueness
 
 Do NOT require `filesChanged > 0` to count an iteration.
 
 ### 4.4 Diff Analyzer & Scoring
 
-Analyzes code changes to prevent "brute force" solutions that pass tests but ruin code quality.
+Prevents "brute force" solutions that pass tests but degrade code quality.
 
 ```typescript
 interface DiffAnalysis {
@@ -257,19 +255,16 @@ interface ScoreWeights {
 }
 ```
 
-**Fallback strategies**: When `git diff HEAD~1` fails (e.g., first commit, detached HEAD), the analyzer tries alternative strategies in order:
+**Diff fallback order** (when `HEAD~1` fails):
 
-1. `HEAD~1` - Compare against parent commit
-2. `HEAD` - Compare against current commit (uncommitted changes)
-3. `--staged` - Compare staged changes
-4. `""` (empty) - Compare working directory
+1. `HEAD~1` → `HEAD` → `--staged` → `""` (working dir)
 
-**Complexity calculation**:
+**Complexity thresholds**:
 
-- `low`: Total changes ≤ 50 lines
-- `medium`: Total changes ≤ 150 lines
-- `high`: Total changes > 150 lines
-- Spread penalty: +10 points for each file beyond 5
+- `low`: ≤50 lines
+- `medium`: ≤150 lines
+- `high`: >150 lines
+- Spread penalty: +10 per file beyond 5
 
 ### 4.5 Iteration Result
 
@@ -325,7 +320,7 @@ interface TestFailure {
 
 ### 4.6 Feedback Generator
 
-Transforms test failures into structured, actionable feedback.
+Transforms test failures into actionable feedback.
 
 ```typescript
 interface FeedbackGenerator {
@@ -337,7 +332,7 @@ interface FeedbackGenerator {
 }
 ```
 
-**Feedback Template Structure** (adapted from Poetiq):
+**Feedback template**:
 
 ```markdown
 ## Iteration {n} Feedback
@@ -470,8 +465,6 @@ const tools = [
 
 ### 5.2 Tool Response Format
 
-Aligned with standard MCP patterns:
-
 ```typescript
 interface ToolResponse {
   success: boolean;
@@ -592,7 +585,7 @@ export const handler: CommandHandler = async (args, context) => {
 
 ### 6.3 Hook: Post-Tool Feedback Injection
 
-The hook acts as the **Trigger**, while the filesystem acts as the **State**.
+Hook triggers on Edit/Write tools; filesystem maintains state.
 
 ```typescript
 // hooks/post-tool-use.ts
@@ -662,12 +655,10 @@ interface TestRunOptions {
   testFiles?: string[];
 }
 
+// Bun test only supports 'junit' (XML) and 'dots' reporters, not JSON.
+// Parse human-readable output with regex + fallback strategies.
 class BunTestRunner implements TestRunner {
   name = "bun";
-
-  // NOTE: Bun test only supports 'junit' (XML) and 'dots' reporters, not JSON.
-  // We parse human-readable output with regex + fallback strategies.
-  // Alternative: Use `--reporter junit` and parse XML, but adds complexity.
 
   async detect(cwd: string): Promise<boolean> {
     // Check for bun.lock or test files
@@ -752,7 +743,7 @@ export async function detectTestRunner(cwd: string): Promise<TestRunner> {
 
 ### 7.2 Worktree Manager
 
-**Important**: Iteration worktrees must be based on the previous iteration's branch, not `main`. This ensures code changes carry forward between iterations. Without this, each iteration would start fresh from `main` and lose all previous work.
+Iteration worktrees must base on previous iteration's branch, not `main`. Without this, each iteration loses previous work.
 
 ```typescript
 // core/worktree-manager.ts
@@ -997,22 +988,22 @@ type ErrorCode =
 
 ### 10.2 Recovery Strategies
 
-| Error             | Strategy                                        |
-| ----------------- | ----------------------------------------------- |
-| `TEST_TIMEOUT`    | Retry with increased timeout, or skip iteration |
-| `WORKTREE_FAILED` | Cleanup and retry, or fall back to branch-based |
-| `MERGE_CONFLICT`  | Present conflicts to user, manual resolution    |
-| `NO_TEST_RUNNER`  | Prompt user to configure test command           |
+| Error             | Strategy                                     |
+| ----------------- | -------------------------------------------- |
+| `TEST_TIMEOUT`    | Retry with increased timeout, or skip        |
+| `WORKTREE_FAILED` | Cleanup and retry, or fall back to branches  |
+| `MERGE_CONFLICT`  | Present to user for manual resolution        |
+| `NO_TEST_RUNNER`  | Prompt user to configure test command        |
 
 ---
 
-## 11. Security Considerations
+## 11. Security
 
-1. **Worktree Isolation**: Each iteration runs in isolated worktree
-2. **No External Network**: Tests run locally, no data exfiltration
-3. **Sandboxed Test Execution**: Respect Claude Code's permission model
-4. **Config Validation**: Validate all user-provided configuration
-5. **Path Sanitization**: Prevent path traversal in file operations
+1. **Worktree Isolation**: Each iteration in isolated worktree
+2. **No External Network**: Tests run locally
+3. **Sandboxed Execution**: Respect Claude Code's permission model
+4. **Config Validation**: Validate user-provided configuration
+5. **Path Sanitization**: Prevent path traversal
 
 ---
 
@@ -1096,7 +1087,7 @@ describe("Session Lifecycle", () => {
 
 ## 13. Parallel Experts Architecture
 
-This section specifies the architecture for running multiple LLM experts in parallel, each exploring different solution paths with seed diversity.
+Architecture for running multiple LLM experts in parallel with seed diversity.
 
 ### 13.1 Design Decisions
 
@@ -1151,7 +1142,7 @@ type ExpertState = {
 
 ### 13.4 Seed Diversity
 
-Each expert receives a deterministic but different seed to ensure diverse exploration paths:
+Each expert gets a deterministic unique seed:
 
 ```typescript
 function calculateExpertSeed(baseSeed: number, expertId: number, maxIterations: number): number {
@@ -1159,11 +1150,11 @@ function calculateExpertSeed(baseSeed: number, expertId: number, maxIterations: 
 }
 ```
 
-This formula (from Poetiq) guarantees that each iteration of each expert gets a unique seed, assuming all configs start with an identical base seed.
+Guarantees unique seeds per expert-iteration pair.
 
 ### 13.5 Expert ID Auto-Detection
 
-Experts detect their identity from the worktree path they're operating in:
+Experts detect identity from worktree path:
 
 ```typescript
 function detectExpertFromPath(worktreePath: string): { expertId: number; iteration: number } | null {
@@ -1260,15 +1251,15 @@ Auto-detects expert ID from current working directory. Scopes iteration tracking
 
 #### `finslipa_vote`
 
-Extended to collect best iteration from each expert, then apply voting strategy across all experts.
+Collects best iteration from each expert, then applies voting strategy across all experts.
 
 ---
 
 ## 14. References
 
-1. **Poetiq ARC-AGI Solver**: <https://github.com/poetiq-ai/poetiq-arc-agi-solver>
-2. **Claude Code Plugins**: <https://code.claude.com/docs/en/plugins>
-3. **MCP Specification**: <https://modelcontextprotocol.io>
+- [Poetiq ARC-AGI Solver](https://github.com/poetiq-ai/poetiq-arc-agi-solver)
+- [Claude Code Plugins](https://code.claude.com/docs/en/plugins)
+- [MCP Specification](https://modelcontextprotocol.io)
 
 ---
 
@@ -1312,14 +1303,14 @@ Claude: ✅ Session abc-123 completed successfully!
 
 ---
 
-## Appendix B: Comparison with Alternatives
+## Appendix B: Alternatives Comparison
 
-| Feature            | Finsliparn        | CCPM                      | spec-workflow-mcp    |
-| ------------------ | ----------------- | ------------------------- | -------------------- |
-| Primary focus      | Solution quality  | Task parallelization      | Spec documentation   |
-| Iteration model    | Same task, refine | Different tasks, parallel | Sequential phases    |
-| Validation         | Test results      | Manual review             | Approval workflow    |
-| Merge strategy     | Winner-takes-all  | Manual per-branch         | N/A                  |
-| Git strategy       | Worktrees         | Worktrees                 | N/A                  |
-| Dashboard          | Yes               | No                        | Yes                  |
-| Claude Code plugin | Yes               | No (shell scripts)        | Yes (.claude-plugin) |
+| Feature         | Finsliparn       | CCPM             | spec-workflow-mcp |
+| --------------- | ---------------- | ---------------- | ----------------- |
+| Focus           | Solution quality | Task parallelism | Spec docs         |
+| Iteration       | Same task refine | Different tasks  | Sequential        |
+| Validation      | Test results     | Manual review    | Approval workflow |
+| Merge           | Winner-takes-all | Manual           | N/A               |
+| Git             | Worktrees        | Worktrees        | N/A               |
+| Dashboard       | Yes              | No               | Yes               |
+| CC plugin       | Yes              | No               | Yes               |
