@@ -34,11 +34,14 @@ See [docs/spec-cc.md](docs/spec-cc.md) for detailed technical specifications.
 - Parallel directive location: `.finsliparn/sessions/{id}/directives/expert-{N}.md`
 - Worktree structure: nested `finsliparn/{sessionId}/expert-{E}/iteration-{N}`
 - Expert ID auto-detected from worktree path
-- Seed formula: `baseSeed + expertId * maxIterations` (per Poetiq)
+- Seed formula: `baseSeed + expertId * maxIterations`
 - Race termination: all experts run to completion, vote at end
 - Expert count fixed at session start (no hot-joining)
 - MVP voting: `highest_score` only (cross-expert comparison)
 - Orchestration: Claude Code Task tool spawns parallel agents (not in Finsliparn codebase)
+- Iterations always increment regardless of code changes (preserves seed predictability)
+- Default `maxIterations`: 10 (more exploration opportunities)
+- Default `shuffleExamples`: true (increases diversity between experts)
 
 ### Implementation Order
 

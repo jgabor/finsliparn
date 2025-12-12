@@ -163,7 +163,7 @@ Your implementation fails on edge cases. See detailed feedback in:
 **Status**: VOTING
 
 ## All Iterations Complete
-Maximum iterations (5) reached. Multiple solutions available.
+Maximum iterations (10) reached. Multiple solutions available.
 
 ## Scores
 | Iteration | Score | Passing Tests |

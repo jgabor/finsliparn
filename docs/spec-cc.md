@@ -157,13 +157,14 @@ type SessionStatus =
   | "cancelled";
 
 interface SessionConfig {
-  maxIterations: number; // Default: 5
+  maxIterations: number; // Default: 10
   targetScore: number; // Default: 1.0 (100%)
   testCommand: string; // e.g., "bun test", "npm test"
   testTimeout: number; // Default: 60000ms
   expertCount: number; // Default: 1 (PoC), 3+ (MVP)
   parallelExperts: boolean; // Default: false (PoC)
   mergeThreshold?: number; // Score threshold for merge (undefined = disabled)
+  shuffleExamples: boolean; // Default: true - randomize feedback order
 }
 
 // Session Manager also provides active session detection
@@ -227,7 +228,17 @@ Finsliparn automatically detects specification files to provide context hints in
 
 Detected files are included in the directive as hints for the LLM to review, not as strict validation requirements.
 
-### 4.3 Diff Analyzer & Scoring
+### 4.3 Iteration Counting
+
+**Important**: Iterations always increment regardless of whether code changes were made. This ensures:
+
+1. Seed diversity formula (`baseSeed + expertId * maxIterations`) produces predictable, unique seeds
+2. Experts run the full `maxIterations` attempts, maximizing exploration
+3. Early termination doesn't break cross-expert seed uniqueness
+
+Do NOT require `filesChanged > 0` to count an iteration.
+
+### 4.4 Diff Analyzer & Scoring
 
 Analyzes code changes to prevent "brute force" solutions that pass tests but ruin code quality.
 
@@ -260,7 +271,7 @@ interface ScoreWeights {
 - `high`: Total changes > 150 lines
 - Spread penalty: +10 points for each file beyond 5
 
-### 4.4 Iteration Result
+### 4.5 Iteration Result
 
 ```typescript
 interface IterationResult {
@@ -312,7 +323,7 @@ interface TestFailure {
 }
 ```
 
-### 4.4 Feedback Generator
+### 4.6 Feedback Generator
 
 Transforms test failures into structured, actionable feedback.
 
@@ -918,9 +929,10 @@ function calculateScore(
 
 ```toml
 [session]
-max_iterations = 5
+max_iterations = 10
 target_score = 1.0
 timeout_ms = 60000
+shuffle_examples = true
 
 [test]
 command = "bun test"
@@ -952,7 +964,7 @@ port = 5050
 | --------------------------- | ------------------------------- | ------------- |
 | `FINSLIPARN_HOME`           | Override config/state directory | `.finsliparn` |
 | `FINSLIPARN_TEST_COMMAND`   | Override test command           | (auto-detect) |
-| `FINSLIPARN_MAX_ITERATIONS` | Override max iterations         | 5             |
+| `FINSLIPARN_MAX_ITERATIONS` | Override max iterations         | 10            |
 | `FINSLIPARN_DASHBOARD_PORT` | Dashboard port                  | 5050          |
 
 ---
