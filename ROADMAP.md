@@ -186,11 +186,20 @@ Parent:
 
 ### Prerequisites
 
-- [ ] Parent Orchestration milestone complete
+- [x] Phase 1 of Parent Orchestration (`worktreePath` parameter)
+
+### Task Selection
+
+Need a real feature to implement. Candidates:
+
+- Diversity-first ordering in voting
+- Soft score improvements
+- Dashboard skeleton
 
 ### Round 2 Steps
 
 - [ ] **Phase 1: Run parallel session with orchestration**
+  - [ ] Select task and write failing tests
   - [ ] `finslipa_start` with expertCount: 3
   - [ ] Spawn 3 Task agents
   - [ ] Wait for all agents to complete
