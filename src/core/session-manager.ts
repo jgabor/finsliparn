@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import { mkdir, readdir, rm } from "node:fs/promises";
 import { join } from "node:path";
 import type {
+  ExpertState,
   IterationResult,
   RefinementSession,
   SessionConfig,
@@ -289,5 +290,141 @@ export class SessionManager {
 
   private getSessionStatePath(sessionId: string): string {
     return join(this.getSessionDir(sessionId), "state.json");
+  }
+
+  calculateExpertSeed(
+    baseSeed: number,
+    expertId: number,
+    maxIterations: number
+  ): number {
+    return baseSeed + expertId * maxIterations;
+  }
+
+  async initializeExperts(
+    sessionId: string,
+    count: number,
+    baseSeed: number
+  ): Promise<void> {
+    const session = await this.loadSession(sessionId);
+    if (!session) {
+      throw new Error(`Session ${sessionId} not found`);
+    }
+
+    session.mode = "parallel";
+    session.expertCount = count;
+    session.baseSeed = baseSeed;
+    session.experts = Array.from({ length: count }, (_, i) => ({
+      id: i,
+      seed: this.calculateExpertSeed(baseSeed, i, session.maxIterations),
+      currentIteration: 0,
+      iterations: [],
+      status: "running" as const,
+    }));
+    session.updatedAt = new Date();
+
+    await this.persistSession(session);
+    log.info("Experts initialized", { sessionId, count, baseSeed });
+  }
+
+  async getExpert(
+    sessionId: string,
+    expertId: number
+  ): Promise<ExpertState | null> {
+    const session = await this.loadSession(sessionId);
+    if (!session?.experts) {
+      return null;
+    }
+    return session.experts.find((e) => e.id === expertId) ?? null;
+  }
+
+  async updateExpert(
+    sessionId: string,
+    expertId: number,
+    updates: Partial<Omit<ExpertState, "id" | "seed">>
+  ): Promise<void> {
+    const session = await this.loadSession(sessionId);
+    if (!session?.experts) {
+      throw new Error(`Session ${sessionId} has no experts`);
+    }
+
+    const expert = session.experts.find((e) => e.id === expertId);
+    if (!expert) {
+      throw new Error(`Expert ${expertId} not found in session ${sessionId}`);
+    }
+
+    Object.assign(expert, updates);
+    session.updatedAt = new Date();
+
+    await this.persistSession(session);
+    log.debug("Expert updated", { sessionId, expertId, updates });
+  }
+
+  async addIterationToExpert(
+    sessionId: string,
+    expertId: number,
+    iteration: IterationResult
+  ): Promise<void> {
+    const session = await this.loadSession(sessionId);
+    if (!session?.experts) {
+      throw new Error(`Session ${sessionId} has no experts`);
+    }
+
+    const expert = session.experts.find((e) => e.id === expertId);
+    if (!expert) {
+      throw new Error(`Expert ${expertId} not found in session ${sessionId}`);
+    }
+
+    iteration.expertId = expertId;
+    expert.iterations.push(iteration);
+    expert.currentIteration = iteration.iteration;
+    session.updatedAt = new Date();
+
+    const iterDir = join(this.getSessionDir(sessionId), "iterations");
+    await mkdir(iterDir, { recursive: true });
+    const iterPath = join(
+      iterDir,
+      `expert-${expertId}-${iteration.iteration}.json`
+    );
+    await Bun.write(iterPath, JSON.stringify(iteration, null, 2));
+
+    await this.persistSession(session);
+    log.debug("Iteration added to expert", {
+      sessionId,
+      expertId,
+      iteration: iteration.iteration,
+      score: iteration.score,
+    });
+  }
+
+  async updateExpertBestResult(
+    sessionId: string,
+    expertId: number,
+    iteration: number,
+    score: number
+  ): Promise<void> {
+    const session = await this.loadSession(sessionId);
+    if (!session?.experts) {
+      throw new Error(`Session ${sessionId} has no experts`);
+    }
+
+    const expert = session.experts.find((e) => e.id === expertId);
+    if (!expert) {
+      throw new Error(`Expert ${expertId} not found in session ${sessionId}`);
+    }
+
+    if (expert.bestScore === undefined || score > expert.bestScore) {
+      const previousBest = expert.bestScore;
+      expert.bestIteration = iteration;
+      expert.bestScore = score;
+      session.updatedAt = new Date();
+      await this.persistSession(session);
+      log.info("New best result for expert", {
+        sessionId,
+        expertId,
+        iteration,
+        score,
+        previousBest,
+      });
+    }
   }
 }
