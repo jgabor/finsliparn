@@ -194,12 +194,14 @@ Transforms test failures into actionable feedback with:
 | Tool | Inputs | Purpose |
 |------|--------|---------|
 | `finslipa_start` | task, maxIterations?, forceNew?, mergeThreshold?, expertCount? | Create session |
-| `finslipa_check` | sessionId | Run tests, score, update directive |
-| `finslipa_vote` | sessionId, strategy? (highest_score/minimal_diff/balanced) | Select best iteration |
+| `finslipa_check` | sessionId, worktreePath? | Run tests, score, update directive |
+| `finslipa_vote` | sessionId, strategy? (highest_score/minimal_diff/balanced/consensus) | Select best iteration |
 | `finslipa_status` | sessionId | Read directive and session state |
 | `finslipa_merge` | sessionId, iteration? | Merge winning iteration |
 | `finslipa_cancel` | sessionId | Cleanup worktrees and branches |
 | `finslipa_clean` | sessionId?, status? | Delete finished session directories |
+
+**`worktreePath` parameter**: Enables parent orchestration for Claude Code parallel mode. When provided, overrides cwd-based expert detection. Required because Task subagents cannot call MCP tools directly.
 
 **Response format**: All tools return `{ success, message, data?, nextSteps?, sessionContext? }`.
 
@@ -284,10 +286,10 @@ complexityPenalty = 0.05 if totalChanges > 500 + 0.05 if complexity > 10
 | Directive system | PoC | ✅ |
 | Complexity analysis | PoC | ✅ |
 | Plugin commands | PoC | ✅ |
-| Parallel worktrees | MVP | 🔜 |
-| Advanced voting | MVP | 🔜 |
-| Staggered launches | MVP | 🔜 |
-| Consensus detection | MVP | 🔜 |
+| Parallel worktrees | MVP | ✅ |
+| Advanced voting | MVP | ✅ |
+| Consensus voting | MVP | ✅ |
+| Parent orchestration | MVP | 🔜 |
 | Dashboard UI | MVP | 🔜 |
 | Coverage integration | Future | — |
 | Static analysis | Future | — |
@@ -389,36 +391,43 @@ Guarantees unique seeds per expert-iteration pair.
 
 Experts detect identity from worktree path pattern: `expert-{E}/iteration-{N}`.
 
-### 13.6 Orchestration Flow
+### 13.6 Orchestration Flow (Parent Orchestration)
+
+Task subagents spawned via Claude Code's Task tool cannot call MCP tools directly. The parent session must call `finslipa_check` on behalf of each expert after they complete.
 
 ```mermaid
 sequenceDiagram
     participant User
-    participant Orchestrator as Claude (Orchestrator)
-    participant MCP as finslipa_start
-    participant E1 as Expert 1
-    participant E2 as Expert 2
-    participant Vote as finslipa_vote
+    participant Parent as Claude (Parent)
+    participant MCP as MCP Server
+    participant E1 as Expert 1 (Task)
+    participant E2 as Expert 2 (Task)
 
-    User->>Orchestrator: /finslipa "task" --experts 2
-    Orchestrator->>MCP: finslipa_start(task, expertCount: 2)
-    MCP-->>Orchestrator: session created, 2 worktrees, 2 directives
+    User->>Parent: /finslipa "task" --experts 2
+    Parent->>MCP: finslipa_start(task, expertCount: 2)
+    MCP-->>Parent: session created, 2 worktrees
 
     par Parallel Expert Execution
-        Orchestrator->>E1: Task agent (reads expert-1.md)
-        E1->>E1: Implement → Check → Iterate
-        E1-->>Orchestrator: Expert 1 complete
+        Parent->>E1: Task agent (worktree 1)
+        E1->>E1: Implement → bun test → iterate
+        E1-->>Parent: Complete (tests pass)
     and
-        Orchestrator->>E2: Task agent (reads expert-2.md)
-        E2->>E2: Implement → Check → Iterate
-        E2-->>Orchestrator: Expert 2 complete
+        Parent->>E2: Task agent (worktree 2)
+        E2->>E2: Implement → bun test → iterate
+        E2-->>Parent: Complete (tests pass)
     end
 
-    Orchestrator->>Vote: finslipa_vote(session, strategy)
-    Vote-->>Orchestrator: Winner selected
-    Orchestrator->>MCP: finslipa_merge(session)
-    Orchestrator-->>User: Done!
+    Note over Parent,MCP: Parent registers iterations on behalf of subagents
+    Parent->>MCP: finslipa_check(session, worktreePath: expert-1)
+    Parent->>MCP: finslipa_check(session, worktreePath: expert-2)
+
+    Parent->>MCP: finslipa_vote(session, strategy)
+    MCP-->>Parent: Winner selected, race.md generated
+    Parent->>MCP: finslipa_merge(session)
+    Parent-->>User: Done!
 ```
+
+**Why parent orchestration?** Claude Code's Task tool spawns subagents that have access to built-in tools (Read, Edit, Bash) but not MCP tools. MCP server connections are session-scoped and not inherited by subagents. This is Claude Code-specific; Copilot CLI agents have direct MCP access.
 
 ### 13.7 Race Summary
 
@@ -431,8 +440,8 @@ sequenceDiagram
 ### 13.8 Tool Updates for Parallel Mode
 
 - `finslipa_start`: Add `expertCount` parameter (1 = single-expert mode)
-- `finslipa_check`: Auto-detects expert ID from cwd, scopes iteration tracking
-- `finslipa_vote`: Collects best iteration from each expert, applies strategy across all
+- `finslipa_check`: Accept optional `worktreePath` parameter for parent orchestration; auto-detects expert ID from path
+- `finslipa_vote`: Collects best iteration from each expert, applies strategy across all; supports `consensus` strategy
 
 ---
 

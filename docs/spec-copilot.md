@@ -23,7 +23,8 @@ This document specifies Copilot CLI-specific adaptations. For core architecture,
 | Progress tracking | Hook-injected messages | `directive.md` file |
 | MCP tools | Plugin manifest | `~/.copilot/mcp-config.json` |
 | Iteration trigger | Automatic via hook | Agent calls `finslipa_check` |
-| Multi-expert | Parallel Task agents | Sequential (single context) |
+| Multi-expert | Parallel Task agents (parent orchestration) | Sequential (single context) |
+| MCP access in multi-expert | Parent only (subagents lack MCP) | Direct (agent has MCP) |
 
 ---
 
@@ -217,13 +218,17 @@ copilot --agent=finsliparn \
 
 See `spec-cc.md` Section 13 for authoritative parallel experts architecture.
 
-**Copilot-specific**: Sequential execution (not parallel)
+**Copilot-specific**: Sequential execution with direct MCP access
 
 | Aspect | Claude Code | Copilot CLI |
 |--------|-------------|-------------|
 | Execution | Parallel Task agents | Sequential in single context |
-| Orchestration | Claude spawns subagents | Agent iterates through worktrees |
-| Progress | Agent receives reports | Agent polls `race.md` |
+| Orchestration | Parent orchestration required | Agent calls MCP directly |
+| MCP access | Subagents lack MCP | Agent has full MCP access |
+| `finslipa_check` | Parent calls with `worktreePath` | Agent calls directly from worktree |
+| Progress | Parent tracks completion | Agent polls `race.md` |
+
+**Why no parent orchestration for Copilot?** The Copilot agent runs in a single context with direct MCP server access via `~/.copilot/mcp-config.json`. Unlike Claude Code's Task subagents (which cannot inherit MCP connections), the Copilot agent can call `finslipa_check` directly from each expert's worktree.
 
 ```mermaid
 sequenceDiagram
