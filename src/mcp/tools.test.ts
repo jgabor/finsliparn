@@ -428,3 +428,212 @@ describe("finslipaVote consensus strategy", () => {
     expect(data.score).toBe(90);
   });
 });
+
+describe("finslipaVote diversity-first ordering", () => {
+  let tempDir: string;
+  let sessionManager: SessionManager;
+
+  beforeEach(async () => {
+    tempDir = join(tmpdir(), `finsliparn-diversity-test-${Date.now()}`);
+    await mkdir(tempDir, { recursive: true });
+    process.chdir(tempDir);
+    sessionManager = new SessionManager(tempDir);
+  });
+
+  afterEach(async () => {
+    try {
+      await rm(tempDir, { recursive: true, force: true });
+    } catch {
+      // Ignore cleanup errors
+    }
+  });
+
+  test("adds ranking array to vote result data", async () => {
+    const session = await sessionManager.createSession(
+      "Test diversity ranking"
+    );
+
+    const iter1: IterationResult = {
+      iteration: 1,
+      status: "completed",
+      timestamp: new Date(),
+      score: 80,
+      solution: { code: "output A", feedback: "", score: 80 },
+    };
+
+    const iter2: IterationResult = {
+      iteration: 2,
+      status: "completed",
+      timestamp: new Date(),
+      score: 90,
+      solution: { code: "output B", feedback: "", score: 90 },
+    };
+
+    await sessionManager.addIteration(session.id, iter1);
+    await sessionManager.addIteration(session.id, iter2);
+
+    const result = await finslipaVote({
+      sessionId: session.id,
+      strategy: "consensus",
+    });
+
+    expect(result.success).toBe(true);
+    expect(result.data).toBeDefined();
+    const data = result.data as { ranking: unknown[] };
+    expect(data.ranking).toBeDefined();
+    expect(Array.isArray(data.ranking)).toBe(true);
+    expect(data.ranking.length).toBe(2);
+  });
+
+  test("ranking entries have correct structure", async () => {
+    const session = await sessionManager.createSession(
+      "Test ranking structure"
+    );
+
+    const iter1: IterationResult = {
+      iteration: 1,
+      status: "completed",
+      timestamp: new Date(),
+      score: 85,
+      solution: { code: "unique output", feedback: "", score: 85 },
+    };
+
+    await sessionManager.addIteration(session.id, iter1);
+
+    const result = await finslipaVote({
+      sessionId: session.id,
+      strategy: "consensus",
+    });
+
+    expect(result.success).toBe(true);
+    const data = result.data as {
+      ranking: Array<{
+        iteration: number;
+        score: number;
+        isFirstOfGroup: boolean;
+      }>;
+    };
+    expect(data.ranking[0]).toMatchObject({
+      iteration: 1,
+      score: 85,
+      isFirstOfGroup: true,
+    });
+  });
+
+  test("groups iterations by solution code output", async () => {
+    const session = await sessionManager.createSession(
+      "Test output grouping for ranking"
+    );
+
+    // 3 iterations: 2 identical outputs, 1 unique
+    const iterations: IterationResult[] = [
+      {
+        iteration: 1,
+        status: "completed",
+        timestamp: new Date(),
+        score: 70,
+        solution: { code: "output A", feedback: "", score: 70 },
+      },
+      {
+        iteration: 2,
+        status: "completed",
+        timestamp: new Date(),
+        score: 90,
+        solution: { code: "output B", feedback: "", score: 90 },
+      },
+      {
+        iteration: 3,
+        status: "completed",
+        timestamp: new Date(),
+        score: 80,
+        solution: { code: "output A", feedback: "", score: 80 },
+      },
+    ];
+
+    for (const iter of iterations) {
+      await sessionManager.addIteration(session.id, iter);
+    }
+
+    const result = await finslipaVote({
+      sessionId: session.id,
+      strategy: "consensus",
+    });
+
+    expect(result.success).toBe(true);
+    const data = result.data as {
+      ranking: Array<{ iteration: number; isFirstOfGroup: boolean }>;
+    };
+
+    // Should have 3 entries
+    expect(data.ranking.length).toBe(3);
+
+    // Count isFirstOfGroup
+    const firstOfGroupCount = data.ranking.filter(
+      (r) => r.isFirstOfGroup
+    ).length;
+    expect(firstOfGroupCount).toBe(2); // 2 unique outputs
+  });
+
+  test("orders unique outputs first, then duplicates", async () => {
+    const session = await sessionManager.createSession(
+      "Test diversity-first ordering"
+    );
+
+    // Create iterations with 2 groups: A has 2 iterations, B has 1
+    const iterations: IterationResult[] = [
+      {
+        iteration: 1,
+        status: "completed",
+        timestamp: new Date(),
+        score: 70,
+        solution: { code: "output A", feedback: "", score: 70 },
+      },
+      {
+        iteration: 2,
+        status: "completed",
+        timestamp: new Date(),
+        score: 90,
+        solution: { code: "output B", feedback: "", score: 90 },
+      },
+      {
+        iteration: 3,
+        status: "completed",
+        timestamp: new Date(),
+        score: 80,
+        solution: { code: "output A", feedback: "", score: 80 },
+      },
+    ];
+
+    for (const iter of iterations) {
+      await sessionManager.addIteration(session.id, iter);
+    }
+
+    const result = await finslipaVote({
+      sessionId: session.id,
+      strategy: "consensus",
+    });
+
+    expect(result.success).toBe(true);
+    expect(result.data).toBeDefined();
+    const data = result.data as {
+      ranking: Array<{
+        iteration: number;
+        score: number;
+        isFirstOfGroup: boolean;
+      }>;
+    };
+    expect(data.ranking).toBeDefined();
+
+    // First 2 entries should be unique outputs (isFirstOfGroup=true)
+    expect(data.ranking[0]?.isFirstOfGroup).toBe(true);
+    expect(data.ranking[1]?.isFirstOfGroup).toBe(true);
+
+    // Last entry should be duplicate (isFirstOfGroup=false)
+    expect(data.ranking[2]?.isFirstOfGroup).toBe(false);
+
+    // Among unique outputs, best score should come first
+    // output B (score 90) should come before output A (best score 80)
+    expect(data.ranking[0]?.score).toBe(90);
+    expect(data.ranking[0]?.iteration).toBe(2);
+  });
+});

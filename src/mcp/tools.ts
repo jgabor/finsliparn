@@ -575,6 +575,72 @@ function selectBalancedWinner(
   });
 }
 
+type RankingEntry = {
+  iteration: number;
+  score: number;
+  isFirstOfGroup: boolean;
+};
+
+function buildDiversityFirstRanking(
+  completedIterations: IterationResult[]
+): RankingEntry[] {
+  const groups = new Map<string, IterationResult[]>();
+
+  for (const iteration of completedIterations) {
+    const code = iteration.solution?.code ?? "";
+    if (!groups.has(code)) {
+      groups.set(code, []);
+    }
+    groups.get(code)?.push(iteration);
+  }
+
+  const groupEntries = Array.from(groups.entries()).map(
+    ([code, iterations]) => {
+      const sortedByScore = iterations.sort(
+        (a, b) => (b.score ?? 0) - (a.score ?? 0)
+      );
+      return {
+        code,
+        bestIteration: sortedByScore[0],
+        allIterations: sortedByScore,
+      };
+    }
+  );
+
+  groupEntries.sort(
+    (a, b) => (b.bestIteration?.score ?? 0) - (a.bestIteration?.score ?? 0)
+  );
+
+  const ranking: RankingEntry[] = [];
+
+  for (const group of groupEntries) {
+    if (!group.bestIteration) {
+      continue; // Should not happen based on logic, but for type safety
+    }
+    ranking.push({
+      iteration: group.bestIteration.iteration,
+      score: group.bestIteration.score ?? 0,
+      isFirstOfGroup: true,
+    });
+  }
+
+  for (const group of groupEntries) {
+    for (let i = 1; i < group.allIterations.length; i++) {
+      const iter = group.allIterations[i];
+      if (!iter) {
+        continue; // Should not happen based on loop condition, but for type safety
+      }
+      ranking.push({
+        iteration: iter.iteration,
+        score: iter.score ?? 0,
+        isFirstOfGroup: false,
+      });
+    }
+  }
+
+  return ranking;
+}
+
 function isSpecFile(filename: string): boolean {
   const lower = filename.toLowerCase();
   if (!lower.endsWith(".md")) {
@@ -1429,11 +1495,14 @@ async function voteSingleMode(
 
   await sessionManager.updateSessionStatus(session.id, "evaluating");
 
+  const ranking = buildDiversityFirstRanking(completedIterations);
+
   const data: {
     selectedIteration: number;
     score: number | undefined;
     strategy: string;
     totalIterations: number;
+    ranking: RankingEntry[];
     voteCount?: number;
     groupCount?: number;
   } = {
@@ -1441,6 +1510,7 @@ async function voteSingleMode(
     score: winner.score,
     strategy,
     totalIterations: completedIterations.length,
+    ranking,
   };
 
   if (voteCount !== undefined) {
